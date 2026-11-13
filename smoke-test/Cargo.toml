@@ -1,0 +1,12 @@
+[package]
+name = "smoke-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Links the static FFmpeg libraries built by this repository and decodes the sample files"
+
+[dependencies]
+# default-features is off so the test links exactly the libraries the
+# archives hold: no libswscale, libswresample or libavdevice.
+ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["codec", "filter", "format", "static"] }
+sha2 = "=0.11.1"

@@ -1,0 +1,6 @@
+# The Rust version the smoke test builds with, so a CI run does not change
+# with the runner image. scripts/smoke-test.sh adds the target it needs.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
