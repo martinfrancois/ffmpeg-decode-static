@@ -14,6 +14,8 @@ before changing what it decided, and add one when you make a choice the code can
 - `smoke-test/` is a Rust program that links the built libraries and decodes `samples/`.
 - `.github/workflows/build.yml` builds and tests every target. Its `ci` job is the required check.
   For a tag, its `release` job publishes what the run built, with `scripts/release.sh`.
+- `renovate.json` finds the versions in `versions.env` through the `# renovate:` comment above
+  each one.
 
 ## Commands
 
@@ -49,7 +51,9 @@ on Linux at least one glibc and one musl target. CI covers the rest.
 
 ## Updating a pinned version
 
-A new source version fails the build until its checksum is in `versions.env`:
+Renovate opens the pull request for a new version of FFmpeg, dav1d or zlib and leaves it open,
+because it cannot compute a source checksum. CI fails on it until you push the checksum to its
+branch:
 
 1. Run `scripts/fetch-sources.sh --print-checksums` and copy the changed `*_SHA256` line into
    `versions.env`.
