@@ -99,10 +99,13 @@ is_known_target() {
 }
 
 # GNU tar is required for reproducible archives. macOS ships it as gtar.
+# The test for it does not use "grep -q": that stops reading at the first
+# match, tar then fails now and then on the closed pipe, and pipefail makes
+# that a "no".
 gnu_tar() {
     if command -v gtar >/dev/null 2>&1; then
         gtar "$@"
-    elif tar --version 2>/dev/null | grep -q 'GNU tar'; then
+    elif tar --version 2>/dev/null | grep 'GNU tar' >/dev/null; then
         tar "$@"
     else
         die "GNU tar not found (on macOS: brew install gnu-tar)"
