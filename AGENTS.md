@@ -13,6 +13,7 @@ before changing what it decided, and add one when you make a choice the code can
   targets. A new target needs an entry there and one in the workflow's build matrix.
 - `smoke-test/` is a Rust program that links the built libraries and decodes `samples/`.
 - `.github/workflows/build.yml` builds and tests every target. Its `ci` job is the required check.
+  For a tag, its `release` job publishes what the run built, with `scripts/release.sh`.
 
 ## Commands
 
@@ -65,6 +66,25 @@ muxer, a device, a hardware accelerator, or a protocol or filter outside its lis
 Decide then whether the lists in the script or the configure flags have to change, and update
 [docs/adr/0001-decode-only-lgpl-configuration.md](docs/adr/0001-decode-only-lgpl-configuration.md)
 if the answer changes what the libraries contain.
+
+## Releases
+
+A release is a tag `v<FFmpeg version>-<build number>` on `main`, for example `v9.0.2-1`. The first
+build of an FFmpeg version is 1. A later change to anything else that ends up in the archives
+(dav1d, zlib, a build flag, a container image) raises the number.
+
+```sh
+git switch main && git pull --ff-only
+git tag v9.0.2-2 && git push origin v9.0.2-2
+```
+
+The tag starts the workflow. It builds and smoke-tests every target again, and the `release` job
+then attaches the archives, the source archives and `checksums.txt` to a new GitHub release. The
+job fails if the tag is not on `main`, does not fit `FFMPEG_VERSION`, or the files are not exactly
+the expected ones. When it fails, no release is published. Rerun the job if the cause was outside
+the repository or the tagged commit has reached `main` since, and delete the draft release first
+if the job left one. A tag is not moved or reused: if the cause is in the repository or a
+published release is wrong, fix `main` and tag the next build number.
 
 ## Samples
 

@@ -6,7 +6,28 @@ The scripts here build FFmpeg 9.0 as static libraries that can read and decode v
 else: no encoders, no muxers, no network, no hardware acceleration. A Rust program links them
 through the [`ffmpeg-next`](https://crates.io/crates/ffmpeg-next) crate and ships as one binary
 with no FFmpeg installed next to it. GitHub Actions builds every target on its own kind of machine
-and runs a Rust test program against the result.
+and runs a Rust test program against the result. A release is published only when every target
+passed.
+
+## Download
+
+Each [release](https://github.com/martinfrancois/ffmpeg-decode-static/releases) has one archive
+per target, the three source archives the libraries were built from, and `checksums.txt`. A
+release is named `v<FFmpeg version>-<build number>`, for example `v9.0.2-1`. The build number goes
+up when the same FFmpeg version is built again, for example after a dav1d update.
+
+`checksums.txt` holds a SHA-256 and a SHA3-256 digest of every other file of the release. Check
+your downloads in the directory you saved them to:
+
+```sh
+cksum --check --ignore-missing checksums.txt       # GNU coreutils 9.8 or newer, both digests
+sha256sum --check --ignore-missing checksums.txt   # any version, the SHA-256 lines
+```
+
+`sha256sum` warns about the SHA3-256 lines, which it cannot read. Without GNU coreutils, compute
+the SHA-256 of your file with `shasum -a 256 <file>` on macOS or `Get-FileHash <file>` in
+PowerShell, and compare it with the file's `SHA256` line in `checksums.txt`. PowerShell prints
+the same digits in upper case.
 
 ## What an archive holds
 
@@ -84,7 +105,7 @@ FFmpeg decodes animated WebP since version 9.0, so it works here.
 
 ## Use it from Rust
 
-1. Build the archive for your target ([below](#build-it-yourself)) and unpack it into an empty
+1. Download the archive for your target ([above](#download)) and unpack it into an empty
    directory.
 2. Depend on `ffmpeg-next` with the `static` feature and without its default features, which would
    ask for libraries that are not in the archive:
@@ -152,8 +173,10 @@ Public License, version 2.1 or later. dav1d is under the BSD 2-Clause licence an
 zlib licence. Every archive carries the three licence texts in `licenses/`.
 
 If you ship a program that links these libraries, the LGPL asks you to let your users replace the
-FFmpeg part. Two things make that possible:
+FFmpeg part. Three things make that possible:
 
+- Every release carries the source archives of FFmpeg, dav1d and zlib that its libraries were
+  built from, unchanged from upstream.
 - `BUILD-INFO` in every archive names the upstream URL and SHA-256 of each source archive and the
   full configure command of each library.
 - The build scripts are in this repository, and `BUILD-INFO` names the revision that ran.
