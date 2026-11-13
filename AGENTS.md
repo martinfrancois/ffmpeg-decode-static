@@ -1,0 +1,84 @@
+# Working on this repository
+
+Scripts and CI that build decode-only, LGPL, static FFmpeg libraries for Rust programs.
+[README.md](README.md) says what the archives hold and how a program uses them. The reasons behind
+the non-obvious choices are in [docs/adr/](docs/adr), one MADR 4 record each. Read the record
+before changing what it decided, and add one when you make a choice the code cannot explain.
+
+## Layout
+
+- `versions.env` is the only place a version, checksum or container image is pinned.
+- `scripts/build.sh` builds one target on the machine it runs on. `scripts/build-linux.sh` runs it
+  in the pinned container. `scripts/lib.sh` holds what the scripts share, including the list of
+  targets. A new target needs an entry there and one in the workflow's build matrix.
+- `smoke-test/` is a Rust program that links the built libraries and decodes `samples/`.
+- `.github/workflows/build.yml` builds and tests every target. Its `ci` job is the required check.
+
+## Commands
+
+Linux targets need podman or docker and a machine of the target's architecture.
+
+```sh
+scripts/fetch-sources.sh                          # download and verify sources into sources/
+scripts/build-linux.sh x86_64-unknown-linux-gnu   # build into dist/
+scripts/smoke-test.sh x86_64-unknown-linux-gnu    # link, decode samples/, check dependencies
+```
+
+The smoke test needs cargo, a C compiler and libclang. The musl targets also need the musl
+headers (`musl-tools` on Debian and Ubuntu) and run on a glibc machine, as they do in CI.
+
+Before you push a change to a script, run `bash -n` and
+[ShellCheck](https://www.shellcheck.net/) on it, then build and smoke-test at least one glibc and
+one musl target. CI covers the rest.
+
+## Updating a pinned version
+
+A new source version fails the build until its checksum is in `versions.env`:
+
+1. Run `scripts/fetch-sources.sh --print-checksums` and copy the changed `*_SHA256` line into
+   `versions.env`.
+2. Compare that value with what upstream publishes before you commit it. FFmpeg signs its
+   archives (`gpg --verify` against the `.asc` file next to the archive, key
+   `FCF986EA15E6E293A5644F10B4322F04D67658D8`). dav1d publishes a `.sha256` file next to the
+   archive. zlib's GitHub release shows a SHA-256 digest for each asset.
+3. An FFmpeg update is only possible within what the `ffmpeg-next` version in
+   `smoke-test/Cargo.toml` supports. Check the crate's release notes, and update the crate in the
+   same pull request if FFmpeg moves to a new minor version.
+
+`scripts/build.sh` fails when a required decoder or demuxer disappears, or when an encoder, a
+muxer, a device, a hardware accelerator, or a protocol or filter outside its lists gets enabled.
+Decide then whether the lists in the script or the configure flags have to change, and update
+[docs/adr/0001-decode-only-lgpl-configuration.md](docs/adr/0001-decode-only-lgpl-configuration.md)
+if the answer changes what the libraries contain.
+
+## Samples
+
+`samples/` holds one tiny file per format, made by `scripts/generate-samples.sh --container`. The
+expected values in `smoke-test/src/main.rs` come from an independent decoder, and the comment at
+the top of that file gives the commands. After regenerating a sample, read the values again with
+those commands. The smoke test's own output is not a source for them: it would only prove that the
+libraries agree with themselves.
+
+## Warnings in the CI logs
+
+Read the log of a green run too. These warnings are known and stay:
+
+- FFmpeg's own sources give about 230 compiler warnings per Linux target (`-Wstringop-overflow`,
+  `-Wstack-usage`, `-Wimplicit-fallthrough`, `-Wunused-function`, `-Warray-bounds`). The build
+  compiles the upstream archive unchanged, so they are upstream's to fix.
+- `actions/download-artifact` prints Node's `DEP0005` deprecation warning. It comes from the
+  action's own code.
+
+Any other warning is new: fix it, or add it here with the reason it stays.
+
+## Conventions
+
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/). One commit
+  per logical change. Changes reach `main` through a pull request, merged by rebase or squash.
+- Shell scripts start with `set -euo pipefail`, take paths from arguments or environment variables
+  with defaults under the repository, and never write outside `build/`, `dist/` and `sources/`.
+  The one exception is `scripts/generate-samples.sh`, which writes `samples/`.
+- A build must not depend on what the machine has installed beyond the tools `scripts/build.sh`
+  checks for. If FFmpeg's configure finds a library on its own, turn it off by name.
+- Archives must come out the same when the same commit is built twice. Keep timestamps, user names
+  and absolute paths out of them.
