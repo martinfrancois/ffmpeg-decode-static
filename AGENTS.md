@@ -47,7 +47,9 @@ headers (`musl-tools` on Debian and Ubuntu) and run on a glibc machine, as they 
 
 Before you push a change to a script, run `bash -n` and
 [ShellCheck](https://www.shellcheck.net/) on it, then build and smoke-test what your machine can:
-on Linux at least one glibc and one musl target. CI covers the rest.
+on Linux at least one glibc and one musl target. CI covers the rest. CI runs the ShellCheck of
+its runner image, version 0.9.0 today, and that version reports notes that newer ones drop. Use
+the same version.
 
 ## Updating a pinned version
 
