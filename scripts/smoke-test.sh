@@ -4,7 +4,9 @@
 # binary loads no FFmpeg, dav1d or zlib shared library.
 #
 # Needs cargo with the target's Rust toolchain, a C compiler and libclang
-# (ffmpeg-sys-next generates its bindings with bindgen at build time).
+# (ffmpeg-sys-next generates its bindings with bindgen at build time). It runs
+# on the target's own kind of machine, except for the musl targets, which
+# build on a glibc machine with the musl headers installed.
 #
 # Usage: scripts/smoke-test.sh <target> [archive]
 #        (default archive: dist/ffmpeg-decode-static-<target>.tar.xz)
@@ -41,6 +43,13 @@ if command -v rustup >/dev/null 2>&1; then
     rustup target add "$target"
 fi
 export FFMPEG_DIR="$work/ffmpeg" CARGO_TARGET_DIR="$work/target"
+case "$target" in
+    *-apple-darwin)
+        # Rust's own default for x86_64 is older than the libraries allow,
+        # and the linker warns about every object when the two differ.
+        export MACOSX_DEPLOYMENT_TARGET=$MACOS_DEPLOYMENT_TARGET
+        ;;
+esac
 cargo clippy --release --locked --target "$target" -- --deny warnings
 cargo build --release --locked --target "$target"
 
@@ -56,14 +65,17 @@ case "$target" in
             printf '%s\n' "$dynamic" >&2
             die "the musl binary is not fully static"
         fi
+        dependencies=""
         ;;
-    *-linux-gnu)
-        dependencies=$(ldd "$binary")
-        printf '%s\n' "$dependencies"
-        if printf '%s\n' "$dependencies" | grep -E -i 'libav|libsw|dav1d|libz\.'; then
-            die "the binary loads a shared library that should be linked statically"
-        fi
-        ;;
+    *-linux-gnu) dependencies=$(ldd "$binary") ;;
+    # The first line of otool's output is the path of the binary itself.
+    *-apple-darwin) dependencies=$(otool -L "$binary" | tail -n +2) ;;
 esac
+if [ -n "$dependencies" ]; then
+    printf '%s\n' "$dependencies"
+    if grep -E -i 'libav|libsw|dav1d|libz\.' <<<"$dependencies"; then
+        die "the binary loads a shared library that should be linked statically"
+    fi
+fi
 
 log "smoke test passed for $target"

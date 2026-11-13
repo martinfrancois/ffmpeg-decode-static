@@ -66,6 +66,10 @@ jobs:
             runner: ubuntu-24.04
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
     env:
       TARGET: ${{ matrix.target }}
     steps:
@@ -77,10 +81,23 @@ jobs:
           name: sources
           path: sources
 
-      - name: Build
+      - name: Build in the pinned container
+        if: runner.os == 'Linux'
         env:
           CONTAINER_ENGINE: docker
         run: scripts/build-linux.sh "$TARGET"
+
+      # The runner image already has Xcode's tools, GNU tar and xz.
+      - name: Install nasm
+        if: matrix.target == 'x86_64-apple-darwin'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install nasm
+
+      - name: Build on the runner
+        if: runner.os == 'macOS'
+        run: scripts/build.sh "$TARGET"
 
       # bindgen reads the C library headers of the target, and the runner
       # only has the glibc ones.
