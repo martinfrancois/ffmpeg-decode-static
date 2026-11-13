@@ -112,7 +112,9 @@ case "$os" in
             *"for x64"*) ;;
             *) die "the MSVC compiler on PATH does not build for x64: $cl_banner" ;;
         esac
-        baseline="$baseline, MSVC ${cl_banner#*Version } or newer"
+        # The banner ends with "Version 19.44.35230 for x64".
+        msvc_version=${cl_banner#*Version }
+        baseline="$baseline, MSVC ${msvc_version%% *} or newer"
         ;;
 esac
 # Only the x86_64 builds have assembly that needs nasm. On aarch64 the C
