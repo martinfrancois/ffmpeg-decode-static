@@ -38,8 +38,8 @@ from one image that Renovate can date.
 
 glibc 2.28 came out in August 2018. Debian 10, Ubuntu 18.10, RHEL 8 and everything newer have it.
 
-`versions.env` pins the image by a dated tag and its digest. An image update must stay on major
-version 8, because AlmaLinux 9 has glibc 2.34.
+`versions.env` pins the image by a dated tag and its digest. `renovate.json` keeps the image on
+major version 8, because AlmaLinux 9 has glibc 2.34.
 
 ### Consequences
 
