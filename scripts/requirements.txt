@@ -1,0 +1,3 @@
+# Build tools for dav1d, installed into a virtual environment by scripts/build.sh.
+meson==1.12.1
+ninja==1.13.2
