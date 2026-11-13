@@ -1,0 +1,116 @@
+name: build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck
+        run: shellcheck scripts/*.sh
+      - name: Rust formatting
+        working-directory: smoke-test
+        run: |
+          rustup toolchain install
+          cargo fmt --check
+
+  sources:
+    name: sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download and verify the source archives
+        run: scripts/fetch-sources.sh
+      # Every build job takes its sources from this artifact, so all targets
+      # are built from the same verified files.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sources
+          path: sources/
+          if-no-files-found: error
+          compression-level: 0
+
+  build:
+    name: ${{ matrix.target }}
+    needs: sources
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sources
+          path: sources
+
+      - name: Build
+        env:
+          CONTAINER_ENGINE: docker
+        run: scripts/build-linux.sh "$TARGET"
+
+      # bindgen reads the C library headers of the target, and the runner
+      # only has the glibc ones.
+      - name: Install the musl headers
+        if: endsWith(matrix.target, '-linux-musl')
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends musl-tools
+
+      - name: Smoke test
+        run: scripts/smoke-test.sh "$TARGET"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ffmpeg-decode-static-${{ matrix.target }}
+          path: dist/ffmpeg-decode-static-${{ matrix.target }}.tar.xz
+          if-no-files-found: error
+          compression-level: 0
+
+  # The one check that branch rules require. It fails when any target fails.
+  ci:
+    name: ci
+    if: always()
+    needs: [lint, sources, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the result of every job
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || exit 1
+          done
