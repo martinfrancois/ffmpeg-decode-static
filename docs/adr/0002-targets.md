@@ -44,6 +44,8 @@ against the result and run it.
 | `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | Alpine container |
 | `aarch64-apple-darwin` | `macos-15` | the runner's Xcode, `MACOSX_DEPLOYMENT_TARGET=11.0` |
 | `x86_64-apple-darwin` | `macos-15-intel` | the runner's Xcode and Homebrew's nasm, `MACOSX_DEPLOYMENT_TARGET=11.0` |
+| `x86_64-pc-windows-msvc` | `windows-2022` | the runner's Visual Studio 2022 and MSYS2, `/MD` |
+| `x86_64-pc-windows-msvc-crt-static` | `windows-2022` | the runner's Visual Studio 2022 and MSYS2, `/MT` |
 
 `scripts/build.sh` refuses to run when the machine's architecture differs from the target's.
 
@@ -59,6 +61,10 @@ an older macOS on Intel, and nobody asked for one. `versions.env` holds the valu
 stops unless every object records it. nasm only records it when the source asks, so on Intel the
 build runs nasm through a wrapper that adds the request. The two macOS targets are separate
 archives and not one universal library, because a Rust build links for one target at a time.
+
+The two Windows archives are for one Rust target and differ in the C runtime.
+[0006-windows-builds-with-msvc-under-msys2.md](0006-windows-builds-with-msvc-under-msys2.md) has
+the reasons, and says why there is no `aarch64-pc-windows-msvc` archive.
 
 ### Consequences
 

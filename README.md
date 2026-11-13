@@ -16,13 +16,14 @@ Each target has one archive, `ffmpeg-decode-static-<target>.tar.xz`:
 BUILD-INFO          versions, source URLs and checksums, compiler, exact build commands
 include/            FFmpeg headers (libavcodec, libavfilter, libavformat, libavutil)
 lib/                libavcodec.a, libavfilter.a, libavformat.a, libavutil.a
+                    (avcodec.lib and so on in the Windows archives)
 lib/pkgconfig/      pkg-config files that point at the directory they are in
 licenses/           licence texts of FFmpeg, dav1d and zlib
 ```
 
-`libavcodec.a` also holds dav1d and zlib, so those four libraries are everything a program links
-([why](docs/adr/0004-dav1d-and-zlib-inside-libavcodec.md)). Do not link a second copy of dav1d or
-zlib into the same program.
+`libavcodec.a` (`avcodec.lib` on Windows) also holds dav1d and zlib, so those four libraries are
+everything a program links ([why](docs/adr/0004-dav1d-and-zlib-inside-libavcodec.md)). Do not
+link a second copy of dav1d or zlib into the same program.
 
 ## Targets
 
@@ -34,9 +35,12 @@ zlib into the same program.
 | `aarch64-unknown-linux-musl` | Alpine, GCC | musl, for a fully static binary |
 | `aarch64-apple-darwin` | macOS 15, Apple clang | macOS 11.0 or newer |
 | `x86_64-apple-darwin` | macOS 15, Apple clang, nasm | macOS 11.0 or newer |
+| `x86_64-pc-windows-msvc` | Windows Server 2022, MSVC 19.44, nasm | the C runtime DLL (`/MD`), which is Rust's default |
+| `x86_64-pc-windows-msvc-crt-static` | Windows Server 2022, MSVC 19.44, nasm | the static C runtime (`/MT`), for `-C target-feature=+crt-static` |
 
-The reasons are in [docs/adr/0002-targets.md](docs/adr/0002-targets.md) and
-[docs/adr/0003-glibc-2-28-baseline.md](docs/adr/0003-glibc-2-28-baseline.md). `versions.env` pins
+The reasons are in [docs/adr/0002-targets.md](docs/adr/0002-targets.md),
+[docs/adr/0003-glibc-2-28-baseline.md](docs/adr/0003-glibc-2-28-baseline.md) and
+[docs/adr/0006-windows-builds-with-msvc-under-msys2.md](docs/adr/0006-windows-builds-with-msvc-under-msys2.md). `versions.env` pins
 the exact container images and the oldest macOS.
 
 ## What is in the build
@@ -96,9 +100,17 @@ FFmpeg decodes animated WebP since version 9.0, so it works here.
    FFMPEG_DIR=/path/to/unpacked cargo build --release
    ```
 
+   On Windows, in PowerShell, with a path that starts with the drive letter:
+
+   ```powershell
+   $env:FFMPEG_DIR = "C:/path/to/unpacked"
+   cargo build --release
+   ```
+
 `ffmpeg-sys-next` generates its bindings at build time, so the build machine needs libclang and a
-C compiler. FFmpeg itself does not need to be installed. [smoke-test/](smoke-test) is a complete
-program that works this way.
+C compiler. On Windows, libclang comes with LLVM. Set `LIBCLANG_PATH` to the directory that holds
+`libclang.dll` if the build does not find it. FFmpeg itself does not need to be installed.
+[smoke-test/](smoke-test) is a complete program that works this way.
 
 Things to know:
 
@@ -116,6 +128,20 @@ Things to know:
 - On macOS, `ffmpeg-sys-next` links a fixed list of Apple frameworks and the system's libiconv for
   a static build, whether or not the libraries use them. On aarch64 the linker prints one warning
   about QTKit, a framework that has no arm64 version.
+- On Windows, take the archive that fits your C runtime. Rust links the C runtime DLL unless you
+  build with `-C target-feature=+crt-static`, and then you need the `-crt-static` archive. Both
+  are for the Rust target `x86_64-pc-windows-msvc`.
+- On Windows, link `bcrypt` yourself. The libraries use it for random numbers, and
+  `ffmpeg-sys-next` does not name it. One declaration anywhere in your program does it:
+
+  ```rust
+  #[cfg(windows)]
+  #[link(name = "bcrypt")]
+  unsafe extern "C" {}
+  ```
+
+- On Windows, link with Visual Studio 2022 version 17.14 or newer. The libraries come from MSVC
+  19.44, and an older linker may not read them.
 
 ## Licence and source code
 
@@ -137,16 +163,20 @@ This describes how the archives are put together. It is not legal advice.
 ## Reproducible archives
 
 Two builds of one commit gave byte-identical archives for both x86_64 Linux targets. The aarch64
-Linux targets and the macOS targets have not been compared yet.
+Linux targets and the macOS targets have not been compared yet. The Windows archives differ from
+build to build: MSVC writes the build time into every object, and the full path of the source
+file on the build machine into many of them
+([issue 4](https://github.com/martinfrancois/ffmpeg-decode-static/issues/4)).
 
-The build is set up for it on every target: the archive entries are sorted and carry the commit's
-time, and the libraries hold no build time, user name or path of the build machine. The macOS
-libraries do record the numeric user and group id of the account that built them, which is 501
-and 20 on GitHub's runners. The sources and the container images are pinned by checksum. The
+The build is set up for it on Linux and macOS: the archive entries are sorted and carry the
+commit's time, and the libraries hold no build time, user name or path of the build machine. The
+macOS libraries do record the numeric user and group id of the account that built them, which is
+501 and 20 on GitHub's runners. The sources and the container images are pinned by checksum. The
 compiler and the other build tools are not: the Linux builds install them from the distribution's
-package repository, the macOS builds use the Xcode of the runner image, and the Intel macOS build
-installs Homebrew's current nasm, so an update there can change the bytes. `BUILD-INFO` records
-the compiler and nasm versions that ran.
+package repository, the macOS builds use the Xcode of the runner image, the Intel macOS build
+installs Homebrew's current nasm, and the Windows builds use the Visual Studio and MSYS2 of the
+runner image, so an update there can change the bytes. `BUILD-INFO` records the compiler and nasm
+versions that ran.
 
 ## Build it yourself
 
@@ -166,6 +196,16 @@ nasm on an Intel Mac. [Homebrew](https://brew.sh/) has the last four.
 scripts/fetch-sources.sh
 scripts/build.sh aarch64-apple-darwin
 scripts/smoke-test.sh aarch64-apple-darwin
+```
+
+The Windows targets build on Windows with Visual Studio 2022 and its C++ tools, Python 3, and
+[MSYS2](https://www.msys2.org/) in `C:\msys64` with the packages `make`, `diffutils`, `nasm` and
+`pkgconf`. From a command prompt in the repository:
+
+```bat
+scripts\msvc-env.cmd fetch-sources.sh
+scripts\msvc-env.cmd build.sh x86_64-pc-windows-msvc
+scripts\msvc-env.cmd smoke-test.sh x86_64-pc-windows-msvc
 ```
 
 The archive lands in `dist/`. [AGENTS.md](AGENTS.md) lists every command, including how to update

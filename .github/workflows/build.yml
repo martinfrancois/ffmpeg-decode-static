@@ -70,6 +70,10 @@ jobs:
             runner: macos-15
           - target: x86_64-apple-darwin
             runner: macos-15-intel
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+          - target: x86_64-pc-windows-msvc-crt-static
+            runner: windows-2022
     env:
       TARGET: ${{ matrix.target }}
     steps:
@@ -99,6 +103,17 @@ jobs:
         if: runner.os == 'macOS'
         run: scripts/build.sh "$TARGET"
 
+      # The runner image has MSYS2 in C:\msys64, but not on PATH.
+      - name: Install the MSYS2 build tools
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: C:\msys64\usr\bin\bash.exe -lc "pacman --sync --noconfirm --needed make diffutils nasm pkgconf"
+
+      - name: Build with MSVC
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\msvc-env.cmd build.sh %TARGET%
+
       # bindgen reads the C library headers of the target, and the runner
       # only has the glibc ones.
       - name: Install the musl headers
@@ -106,7 +121,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends musl-tools
 
       - name: Smoke test
+        if: runner.os != 'Windows'
         run: scripts/smoke-test.sh "$TARGET"
+
+      - name: Smoke test with MSVC
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\msvc-env.cmd smoke-test.sh %TARGET%
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

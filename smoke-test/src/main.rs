@@ -19,6 +19,12 @@ use ffmpeg::util::frame::video::Video;
 use ffmpeg::{Dictionary, Rational, codec, decoder, ffi, filter, format, media};
 use sha2::{Digest, Sha256};
 
+// The Windows libraries get their random numbers from bcrypt.dll, and
+// ffmpeg-sys-next does not name that import library when FFMPEG_DIR is set.
+#[cfg(windows)]
+#[link(name = "bcrypt")]
+unsafe extern "C" {}
+
 const EXPECTED_LICENSE: &str = "LGPL version 2.1 or later";
 const EXPECTED_PROTOCOLS: [&str; 2] = ["file", "pipe"];
 

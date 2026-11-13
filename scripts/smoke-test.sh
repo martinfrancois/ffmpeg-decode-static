@@ -6,7 +6,8 @@
 # Needs cargo with the target's Rust toolchain, a C compiler and libclang
 # (ffmpeg-sys-next generates its bindings with bindgen at build time). It runs
 # on the target's own kind of machine, except for the musl targets, which
-# build on a glibc machine with the musl headers installed.
+# build on a glibc machine with the musl headers installed. On Windows, run it
+# through scripts/msvc-env.cmd.
 #
 # Usage: scripts/smoke-test.sh <target> [archive]
 #        (default archive: dist/ffmpeg-decode-static-<target>.tar.xz)
@@ -21,6 +22,7 @@ target=${1:-}
 is_known_target "$target" || die "usage: scripts/smoke-test.sh <target> [archive]"
 archive=${2:-"$REPO_ROOT/dist/ffmpeg-decode-static-$target.tar.xz"}
 [ -f "$archive" ] || die "$archive not found"
+triple=$(rust_triple "$target")
 
 work=${WORK_DIR:-"$REPO_ROOT/build/smoke-$target"}
 mkdir -p "$work"
@@ -40,20 +42,31 @@ cd "$REPO_ROOT/smoke-test"
 if command -v rustup >/dev/null 2>&1; then
     # Installs the toolchain that rust-toolchain.toml names.
     rustup toolchain install
-    rustup target add "$target"
+    rustup target add "$triple"
 fi
 export FFMPEG_DIR="$work/ffmpeg" CARGO_TARGET_DIR="$work/target"
+binary=$work/target/$triple/release/smoke-test
 case "$target" in
     *-apple-darwin)
         # Rust's own default for x86_64 is older than the libraries allow,
         # and the linker warns about every object when the two differ.
         export MACOSX_DEPLOYMENT_TARGET=$MACOS_DEPLOYMENT_TARGET
         ;;
+    *-pc-windows-msvc*)
+        msvc_first_on_path
+        # cargo is a Windows program and takes paths with a drive letter.
+        FFMPEG_DIR=$(cygpath -m "$FFMPEG_DIR")
+        CARGO_TARGET_DIR=$(cygpath -m "$CARGO_TARGET_DIR")
+        binary=$binary.exe
+        # The program has to use the same C runtime as the libraries.
+        case "$target" in
+            *-crt-static) export RUSTFLAGS="-C target-feature=+crt-static" ;;
+        esac
+        ;;
 esac
-cargo clippy --release --locked --target "$target" -- --deny warnings
-cargo build --release --locked --target "$target"
+cargo clippy --release --locked --target "$triple" -- --deny warnings
+cargo build --release --locked --target "$triple"
 
-binary=$work/target/$target/release/smoke-test
 "$binary" "$REPO_ROOT/samples"
 
 log "checking shared library dependencies"
@@ -70,12 +83,23 @@ case "$target" in
     *-linux-gnu) dependencies=$(ldd "$binary") ;;
     # The first line of otool's output is the path of the binary itself.
     *-apple-darwin) dependencies=$(otool -L "$binary" | tail -n +2) ;;
+    # Only the DLL names: the dump starts with the path of the binary.
+    *-pc-windows-msvc*)
+        dependencies=$(dumpbin -nologo -dependents "$(cygpath -m "$binary")" | tr -d '\r' | grep -i '\.dll$')
+        ;;
 esac
 if [ -n "$dependencies" ]; then
     printf '%s\n' "$dependencies"
-    if grep -E -i 'libav|libsw|dav1d|libz\.' <<<"$dependencies"; then
+    if grep -E -i 'libav|libsw|dav1d|libz\.|avcodec|avformat|avutil|avfilter|zlib' <<<"$dependencies"; then
         die "the binary loads a shared library that should be linked statically"
     fi
 fi
+case "$target" in
+    *-crt-static)
+        if printf '%s\n' "$dependencies" | grep -E -i 'vcruntime|msvcp|ucrtbase|api-ms-win-crt'; then
+            die "the binary loads the C runtime as a DLL, expected the static C runtime"
+        fi
+        ;;
+esac
 
 log "smoke test passed for $target"
