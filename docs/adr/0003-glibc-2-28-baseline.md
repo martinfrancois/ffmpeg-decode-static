@@ -55,7 +55,7 @@ version 8, because AlmaLinux 9 has glibc 2.34.
 ### Confirmation
 
 `scripts/build.sh` stops when the glibc of the machine it runs on differs from `GLIBC_VERSION` in
-`versions.env`, and writes that version into `BUILD-INFO` ("runs on: glibc 2.28 or newer").
+`versions.env`, and writes that version into `BUILD-INFO` ("needs: glibc 2.28 or newer").
 
 ## Pros and Cons of the Options
 

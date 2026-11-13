@@ -31,6 +31,14 @@ scripts/build.sh aarch64-apple-darwin
 scripts/smoke-test.sh aarch64-apple-darwin
 ```
 
+Windows targets build on Windows. `scripts\msvc-env.cmd` sets up MSVC and runs a script in MSYS2
+bash ([docs/adr/0006-windows-builds-with-msvc-under-msys2.md](docs/adr/0006-windows-builds-with-msvc-under-msys2.md)):
+
+```bat
+scripts\msvc-env.cmd build.sh x86_64-pc-windows-msvc
+scripts\msvc-env.cmd smoke-test.sh x86_64-pc-windows-msvc
+```
+
 The smoke test needs cargo, a C compiler and libclang. The musl targets also need the musl
 headers (`musl-tools` on Debian and Ubuntu) and run on a glibc machine, as they do in CI.
 
@@ -80,6 +88,9 @@ Read the log of a green run too. These warnings are known and stay:
   all.
 - The aarch64 macOS smoke test links with one linker warning about QTKit, a framework that
   `ffmpeg-sys-next` asks for. README.md tells users about it.
+- MSVC gives about 100 warnings for FFmpeg's own sources per Windows target (C4334, C4113 and a
+  few others), and meson warns that MSVC has no `-fvisibility=hidden` when it configures dav1d.
+  Neither matters for a static library.
 
 Any other warning is new: fix it, or add it here with the reason it stays.
 
@@ -89,8 +100,12 @@ Any other warning is new: fix it, or add it here with the reason it stays.
   per logical change. Changes reach `main` through a pull request, merged by rebase or squash.
 - Shell scripts start with `set -euo pipefail`, take paths from arguments or environment variables
   with defaults under the repository, and never write outside `build/`, `dist/` and `sources/`.
-  The one exception is `scripts/generate-samples.sh`, which writes `samples/`.
+  The one exception is `scripts/generate-samples.sh`, which writes `samples/`. The scripts also
+  run on macOS, so they have to work in its bash 3.2: no associative arrays, and no expansion of
+  an empty array.
 - A build must not depend on what the machine has installed beyond the tools `scripts/build.sh`
   checks for. If FFmpeg's configure finds a library on its own, turn it off by name.
 - Archives must come out the same when the same commit is built twice. Keep timestamps, user names
-  and absolute paths out of them.
+  and absolute paths out of them. The Windows archives do not meet this yet: MSVC writes the build
+  time and source paths into its objects
+  ([issue 4](https://github.com/martinfrancois/ffmpeg-decode-static/issues/4)).

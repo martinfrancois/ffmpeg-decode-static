@@ -12,7 +12,8 @@ DAV1D_URL="https://downloads.videolan.org/pub/videolan/dav1d/$DAV1D_VERSION/$DAV
 ZLIB_ARCHIVE="zlib-$ZLIB_VERSION.tar.xz"
 ZLIB_URL="https://github.com/madler/zlib/releases/download/v$ZLIB_VERSION/$ZLIB_ARCHIVE"
 
-# Every target this repository builds, as Rust target triples.
+# Every target this repository builds. Each is a Rust target triple, except
+# that "-crt-static" marks the Windows build for the static C runtime.
 ALL_TARGETS="
 x86_64-unknown-linux-gnu
 aarch64-unknown-linux-gnu
@@ -20,6 +21,8 @@ x86_64-unknown-linux-musl
 aarch64-unknown-linux-musl
 aarch64-apple-darwin
 x86_64-apple-darwin
+x86_64-pc-windows-msvc
+x86_64-pc-windows-msvc-crt-static
 "
 
 log() {
@@ -88,6 +91,18 @@ default_build_identity() {
             die "set BUILD_REVISION when building outside a git checkout"
     fi
     export SOURCE_DATE_EPOCH BUILD_REVISION
+}
+
+# The Rust target triple of a target, without the "-crt-static" marker.
+rust_triple() {
+    printf '%s\n' "${1%-crt-static}"
+}
+
+# MSYS2 has a link.exe of its own that hides the MSVC linker. This puts the
+# directory of the MSVC compiler, which also holds its linker, first on PATH.
+msvc_first_on_path() {
+    command -v cl >/dev/null 2>&1 || die "cl not found on PATH, run this through scripts/msvc-env.cmd"
+    PATH="$(dirname "$(command -v cl)"):$PATH"
 }
 
 is_known_target() {

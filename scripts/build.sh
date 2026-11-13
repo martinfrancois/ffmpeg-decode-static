@@ -5,7 +5,7 @@
 # versions.env. scripts/build-linux.sh does that for the Linux targets by
 # running this script in the pinned container. The macOS targets run it
 # directly, with Xcode's command line tools, GNU tar, xz, pkg-config and, on
-# x86_64, nasm installed.
+# x86_64, nasm installed. scripts/msvc-env.cmd runs it for the Windows targets.
 #
 # Usage: scripts/build.sh <target>
 #
@@ -32,6 +32,7 @@ case "$target" in
     *-linux-gnu) os=linux libc=glibc ;;
     *-linux-musl) os=linux libc=musl ;;
     *-apple-darwin) os=macos ;;
+    *-pc-windows-msvc*) os=windows ;;
 esac
 
 sources=${SOURCES_DIR:-"$REPO_ROOT/sources"}
@@ -47,9 +48,12 @@ host_arch=$(uname -m)
 [ "$host_arch" = arm64 ] && host_arch=aarch64
 [ "$host_arch" = "$arch" ] || die "$target needs a $arch machine, this one is $host_arch"
 
-# Flags for every C file of the three libraries.
+# Extra compiler flags that FFmpeg gets, and zlib and dav1d except on Windows,
+# where their own build files take the C runtime setting.
 extra_cflags=""
-tools="make pkg-config python3 xz"
+python=python3
+venv_bin=bin
+tools="make pkg-config xz"
 case "$os" in
     linux)
         export CC=gcc AR=ar
@@ -62,10 +66,10 @@ case "$os" in
             # The libraries can need any symbol of the glibc they were compiled against.
             [ "$glibc" = "$GLIBC_VERSION" ] ||
                 die "this machine has glibc $glibc, but $target is built against $GLIBC_VERSION (use scripts/build-linux.sh)"
-            baseline="glibc $glibc"
+            baseline="glibc $glibc or newer"
         else
             # musl's ldd prints its version and exits non-zero when run without a file.
-            baseline="musl $({ ldd 2>&1 || true; } | sed -n 's/^Version //p')"
+            baseline="musl $({ ldd 2>&1 || true; } | sed -n 's/^Version //p') or newer"
         fi
         if [ "$arch" = x86_64 ]; then
             # Keeps the assembler from marking GOT accesses as relaxable.
@@ -84,16 +88,46 @@ case "$os" in
         # zlib archives with libtool here, which takes no ar flags.
         export ZERO_AR_DATE=1
         zlib_arflags=""
-        baseline="macOS $MACOS_DEPLOYMENT_TARGET"
+        baseline="macOS $MACOS_DEPLOYMENT_TARGET or newer"
+        ;;
+    windows)
+        msvc_first_on_path
+        export CC=cl AR=lib
+        python=python
+        venv_bin=Scripts
+        # cmp is what FFmpeg's makefiles compare generated files with.
+        tools="$tools cygpath nmake cmp"
+        # /MD is the C runtime DLL, which Rust links by default. /MT is the
+        # static C runtime, for programs built with "-C target-feature=+crt-static"
+        # (docs/adr/0006-windows-builds-with-msvc-under-msys2.md).
+        case "$target" in
+            *-crt-static) crt=MT baseline="the static C runtime (/MT)" ;;
+            *) crt=MD baseline="the C runtime DLL (/MD)" ;;
+        esac
+        extra_cflags="-$crt"
+        # cl prints its version banner on stderr when run without arguments.
+        # sed and not head: sed reads to the end, so cl never sees a closed pipe.
+        cl_banner=$(cl 2>&1 | sed -n 1p)
+        case "$cl_banner" in
+            *"for x64"*) ;;
+            *) die "the MSVC compiler on PATH does not build for x64: $cl_banner" ;;
+        esac
+        baseline="$baseline, MSVC ${cl_banner#*Version } or newer"
         ;;
 esac
 # Only the x86_64 builds have assembly that needs nasm. On aarch64 the C
 # compiler assembles the hand-written code.
 [ "$arch" = x86_64 ] && tools="$tools nasm"
 
-for tool in "$CC" "$AR" $tools; do
+for tool in "$CC" "$AR" "$python" $tools; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH"
 done
+
+if [ "$os" != windows ]; then
+    cc_version=$("$CC" --version | sed -n 1p)
+else
+    cc_version=$cl_banner
+fi
 
 verify_sources "$sources"
 
@@ -129,14 +163,26 @@ pkg=$work/package
 rm -rf "${work:?}/src" "${work:?}/deps" "${work:?}/stage" "${work:?}/package"
 mkdir -p "$src" "$deps" "$stage" "$pkg"
 
+# The MSVC tools and the Windows build of meson take paths with a drive
+# letter. Everywhere else the two forms are the same.
+native_path() {
+    if [ "$os" = windows ]; then
+        cygpath -m "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+work_native=$(native_path "$work")
+deps_native=$(native_path "$deps")
+
 # meson and ninja come from PyPI at pinned versions on every platform.
 venv=$work/venv
-if [ ! -x "$venv/bin/meson" ]; then
-    python3 -m venv "$venv"
-    "$venv/bin/python" -m pip install --quiet --disable-pip-version-check \
+if [ ! -x "$venv/$venv_bin/meson" ]; then
+    "$python" -m venv "$venv"
+    "$venv/$venv_bin/python" -m pip install --quiet --disable-pip-version-check \
         --requirement "$REPO_ROOT/scripts/requirements.txt"
 fi
-PATH="$venv/bin:$PATH"
+PATH="$venv/$venv_bin:$PATH"
 
 # Each build step appends the exact command it ran. BUILD-INFO prints them.
 commands=$work/commands.txt
@@ -162,7 +208,7 @@ recorded() {
     {
         printf '[%s]\n' "$label"
         printf '%s' "${RECORD_ENV:+$RECORD_ENV }"
-        printf '%s\n\n' "$(shell_words "$@")" | sed "s|$work|\$WORK|g"
+        printf '%s\n\n' "$(shell_words "$@")" | sed -e "s|$work_native|\$WORK|g" -e "s|$work|\$WORK|g"
     } >>"$commands"
     "$@"
 }
@@ -175,26 +221,58 @@ extract() {
 # --- zlib --------------------------------------------------------------------
 
 extract "$ZLIB_ARCHIVE"
-(
+if [ "$os" = windows ]; then (
+    cd "$src/zlib-$ZLIB_VERSION"
+    # zlib's own flags for MSVC, without the debug information (-Zi) that
+    # would make every program that links the library look for zlib.pdb.
+    recorded zlib nmake -nologo -f win32/Makefile.msc "CFLAGS=-nologo -$crt -W3 -O2 -Oy-" zlib.lib
+    # FFmpeg's configure asks pkg-config for zlib and turns -lz into zlib.lib.
+    mkdir -p "$deps/include" "$deps/lib/pkgconfig"
+    cp zlib.h zconf.h "$deps/include/"
+    cp zlib.lib "$deps/lib/zlib.lib"
+    cat >"$deps/lib/pkgconfig/zlib.pc" <<EOF
+prefix=$deps_native
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: zlib
+Description: zlib compression library
+Version: $ZLIB_VERSION
+Libs: -L\${libdir} -lz
+Cflags: -I\${includedir}
+EOF
+); else (
     cd "$src/zlib-$ZLIB_VERSION"
     export CFLAGS="-O3 -fPIC${extra_cflags:+ $extra_cflags}"
     RECORD_ENV="CFLAGS='$CFLAGS'" recorded zlib ./configure --static --prefix="$deps"
     make -j"$jobs" libz.a ${zlib_arflags:+"ARFLAGS=$zlib_arflags"}
     make install ${zlib_arflags:+"ARFLAGS=$zlib_arflags"}
-)
+); fi
 
 # --- dav1d -------------------------------------------------------------------
 
 extract "$DAV1D_ARCHIVE"
 (
     cd "$src/dav1d-$DAV1D_VERSION"
+    # meson has its own option for the MSVC C runtime. Everywhere else the
+    # extra flags go to the compiler as they are.
+    if [ "$os" = windows ]; then
+        dav1d_cflags="-Db_vscrt=$(printf '%s' "$crt" | tr '[:upper:]' '[:lower:]')"
+    else
+        dav1d_cflags=${extra_cflags:+"-Dc_args=$extra_cflags"}
+    fi
     recorded dav1d meson setup build \
-        --prefix "$deps" --libdir lib \
+        --prefix "$deps_native" --libdir lib \
         --buildtype release --default-library static \
         -Db_staticpic=true \
-        ${extra_cflags:+"-Dc_args=$extra_cflags"} \
+        ${dav1d_cflags:+"$dav1d_cflags"} \
         -Denable_tools=false -Denable_tests=false -Denable_examples=false
     ninja -C build -j"$jobs" install
+    # meson names the static library libdav1d.a on every platform. FFmpeg's
+    # configure turns -ldav1d into dav1d.lib for MSVC.
+    if [ "$os" = windows ]; then
+        cp "$deps/lib/libdav1d.a" "$deps/lib/dav1d.lib"
+    fi
 )
 
 # --- FFmpeg ------------------------------------------------------------------
@@ -206,7 +284,6 @@ ffmpeg_filters="bwdif format yadif"
 ffmpeg_protocols="file pipe"
 
 ffmpeg_flags=(
-    "--cc=$CC"
     --disable-autodetect
     --disable-iconv
     --disable-programs
@@ -230,8 +307,12 @@ ffmpeg_flags=(
     --enable-zlib
     --enable-libdav1d
     --pkg-config-flags=--static
-    --enable-pthreads
 )
+if [ "$os" = windows ]; then
+    ffmpeg_flags+=(--toolchain=msvc --target-os=win32 --arch=x86_64 --enable-w32threads)
+else
+    ffmpeg_flags+=("--cc=$CC" --enable-pthreads)
+fi
 if [ -n "$extra_cflags" ]; then
     ffmpeg_flags+=("--extra-cflags=$extra_cflags")
 fi
@@ -245,7 +326,11 @@ ffmpeg_src=$src/ffmpeg-$FFMPEG_VERSION
     # into the libraries holds no path of the build machine.
     export PKG_CONFIG_LIBDIR="$deps/lib/pkgconfig"
     # shellcheck disable=SC2016 # $WORK is the placeholder that BUILD-INFO prints
-    RECORD_ENV='PKG_CONFIG_LIBDIR=$WORK/deps/lib/pkgconfig' recorded ffmpeg ./configure "${ffmpeg_flags[@]}"
+    RECORD_ENV='PKG_CONFIG_LIBDIR=$WORK/deps/lib/pkgconfig' recorded ffmpeg ./configure "${ffmpeg_flags[@]}" || {
+        # configure's own message does not say why a check failed.
+        tail -n 60 ffbuild/config.log >&2 || true
+        die "FFmpeg's configure failed, the end of ffbuild/config.log is above"
+    }
     make -j"$jobs"
     make install DESTDIR="$stage"
 )
@@ -307,13 +392,23 @@ log "packaging"
 mkdir -p "$pkg/lib/pkgconfig" "$pkg/licenses"
 cp -R "$stage/usr/local/include" "$pkg/include"
 
+# FFmpeg names a static library lib<name>.a, and <name>.lib when it builds
+# with MSVC. rustc's MSVC targets look for the second form.
+lib_file() {
+    if [ "$os" = windows ]; then
+        printf '%s.lib\n' "$1"
+    else
+        printf 'lib%s.a\n' "$1"
+    fi
+}
+
 ffmpeg_libs="avcodec avfilter avformat avutil"
 for lib in $ffmpeg_libs; do
-    cp "$stage/usr/local/lib/lib$lib.a" "$pkg/lib/"
+    cp "$stage/usr/local/lib/$(lib_file "$lib")" "$pkg/lib/"
 done
 installed=""
-for file in "$stage"/usr/local/lib/lib*.a; do
-    name=$(basename "$file" .a)
+for file in "$stage"/usr/local/lib/*.*; do
+    name=$(basename "${file%.*}")
     installed="$installed${installed:+ }${name#lib}"
 done
 [ "$installed" = "$ffmpeg_libs" ] || die "FFmpeg installed the libraries '$installed', expected '$ffmpeg_libs'"
@@ -346,6 +441,11 @@ EOF
         [ "$minos" = "$objects $MACOS_DEPLOYMENT_TARGET" ] ||
             die "expected $objects objects for macOS $MACOS_DEPLOYMENT_TARGET, found (count, version): $minos"
         ;;
+    windows)
+        lib -nologo "-out:$(native_path "$pkg/lib/avcodec.merged.lib")" \
+            "$(native_path "$pkg/lib/avcodec.lib")" "$deps_native/lib/dav1d.lib" "$deps_native/lib/zlib.lib"
+        mv "$pkg/lib/avcodec.merged.lib" "$pkg/lib/avcodec.lib"
+        ;;
 esac
 
 if [ "$os" = linux ] && [ "$arch" = x86_64 ]; then
@@ -364,12 +464,15 @@ for lib in $ffmpeg_libs; do
     sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
         -e 's|^libdir=.*|libdir=${prefix}/lib|' \
         -e 's|^includedir=.*|includedir=${prefix}/include|' \
-        -e "/^Libs/ s| -L$deps/lib||g" \
+        -e "/^Libs/ s| -L$deps_native/lib||g" \
+        -e "/^Libs/ s| -libpath:$deps_native/lib||g" \
         -e '/^Libs/ s| -ldav1d||g' \
         -e '/^Libs/ s| -lz||g' \
+        -e '/^Libs/ s| dav1d\.lib||g' \
+        -e '/^Libs/ s| zlib\.lib||g' \
         "$stage/usr/local/lib/pkgconfig/lib$lib.pc" >"$pkg/lib/pkgconfig/lib$lib.pc"
 done
-if grep -n -e "$work" -e dav1d -e ' -lz' "$pkg"/lib/pkgconfig/*.pc; then
+if grep -n -e "$work" -e "$work_native" -e dav1d -e ' -lz' -e ' zlib\.lib' "$pkg"/lib/pkgconfig/*.pc; then
     die "a pkg-config file still names a build path or a merged library"
 fi
 
@@ -385,9 +488,9 @@ https://github.com/martinfrancois/ffmpeg-decode-static
 
 target:           $target
 build revision:   $BUILD_REVISION
-runs on:          $baseline or newer
+needs:            $baseline
 FFmpeg licence:   $license
-C compiler:       $("$CC" --version | head -n 1)
+C compiler:       $cc_version
 assembler:        $assembler
 meson:            $(meson --version)
 
@@ -398,7 +501,7 @@ EOF
     done < <(source_table)
     cat <<EOF
 
-libavcodec.a also holds the objects of dav1d and zlib. The licence of each
+$(lib_file avcodec) also holds the objects of dav1d and zlib. The licence of each
 library is in licenses/.
 
 Build commands, run in each unpacked source directory (\$WORK is the scratch
