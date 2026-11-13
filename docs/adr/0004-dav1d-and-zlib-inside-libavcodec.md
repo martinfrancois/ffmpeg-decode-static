@@ -34,9 +34,10 @@ How do dav1d and zlib reach the linker?
 Chosen option: "Merge the objects of dav1d and zlib into `libavcodec.a`", because it is the only
 option where the four libraries that `ffmpeg-sys-next` already links are complete.
 
-`scripts/build.sh` appends both libraries to `libavcodec.a` with an `ar` script, and removes
-`-ldav1d`, `-lz` and the build paths from the pkg-config files. libavformat needs zlib too. It
-always links together with libavcodec, so the copy in libavcodec serves both.
+`scripts/build.sh` appends both libraries to `libavcodec.a`, with an `ar` script on Linux and with
+`libtool -static` on macOS, and removes `-ldav1d`, `-lz` and the build paths from the pkg-config
+files. libavformat needs zlib too. It always links together with libavcodec, so the copy in
+libavcodec serves both.
 
 ### Consequences
 

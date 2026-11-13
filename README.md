@@ -32,10 +32,12 @@ zlib into the same program.
 | `aarch64-unknown-linux-gnu` | AlmaLinux 8, GCC 14 | glibc 2.28 or newer |
 | `x86_64-unknown-linux-musl` | Alpine, GCC | musl, for a fully static binary |
 | `aarch64-unknown-linux-musl` | Alpine, GCC | musl, for a fully static binary |
+| `aarch64-apple-darwin` | macOS 15, Apple clang | macOS 11.0 or newer |
+| `x86_64-apple-darwin` | macOS 15, Apple clang, nasm | macOS 11.0 or newer |
 
 The reasons are in [docs/adr/0002-targets.md](docs/adr/0002-targets.md) and
 [docs/adr/0003-glibc-2-28-baseline.md](docs/adr/0003-glibc-2-28-baseline.md). `versions.env` pins
-the exact container images.
+the exact container images and the oldest macOS.
 
 ## What is in the build
 
@@ -108,6 +110,12 @@ Things to know:
   and Ubuntu that is the `musl-tools` package. The resulting binary is fully static.
 - For a `*-linux-gnu` target, the libraries need glibc 2.28, but the glibc your own binary needs is
   set by the machine you link on. To run on old distributions, link on one.
+- For a `*-apple-darwin` target, set `MACOSX_DEPLOYMENT_TARGET=11.0` or newer when you build your
+  program. Rust's default for x86_64 is older, and the linker then warns that every object was
+  built for a newer macOS.
+- On macOS, `ffmpeg-sys-next` links a fixed list of Apple frameworks and the system's libiconv for
+  a static build, whether or not the libraries use them. On aarch64 the linker prints one warning
+  about QTKit, a framework that has no arm64 version.
 
 ## Licence and source code
 
@@ -129,13 +137,16 @@ This describes how the archives are put together. It is not legal advice.
 ## Reproducible archives
 
 Two builds of one commit gave byte-identical archives for both x86_64 Linux targets. The aarch64
-targets go through the same steps but have not been compared yet.
+Linux targets and the macOS targets have not been compared yet.
 
-The archive entries are sorted and carry the commit's time, and the libraries hold no timestamp,
-user name or build path. The sources and the container images are pinned by checksum. The compiler
-and the other build tools are not: the build installs them from the distribution's package
-repository, so a package update there can change the bytes. `BUILD-INFO` records the compiler and
-nasm versions that ran.
+The build is set up for it on every target: the archive entries are sorted and carry the commit's
+time, and the libraries hold no build time, user name or path of the build machine. The macOS
+libraries do record the numeric user and group id of the account that built them, which is 501
+and 20 on GitHub's runners. The sources and the container images are pinned by checksum. The
+compiler and the other build tools are not: the Linux builds install them from the distribution's
+package repository, the macOS builds use the Xcode of the runner image, and the Intel macOS build
+installs Homebrew's current nasm, so an update there can change the bytes. `BUILD-INFO` records
+the compiler and nasm versions that ran.
 
 ## Build it yourself
 
@@ -146,6 +157,15 @@ target's.
 scripts/fetch-sources.sh
 scripts/build-linux.sh x86_64-unknown-linux-gnu
 scripts/smoke-test.sh x86_64-unknown-linux-gnu
+```
+
+The macOS targets build on a Mac with Xcode's command line tools, GNU tar, xz and pkg-config, plus
+nasm on an Intel Mac. [Homebrew](https://brew.sh/) has the last four.
+
+```sh
+scripts/fetch-sources.sh
+scripts/build.sh aarch64-apple-darwin
+scripts/smoke-test.sh aarch64-apple-darwin
 ```
 
 The archive lands in `dist/`. [AGENTS.md](AGENTS.md) lists every command, including how to update

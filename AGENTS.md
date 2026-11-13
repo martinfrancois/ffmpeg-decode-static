@@ -24,12 +24,19 @@ scripts/build-linux.sh x86_64-unknown-linux-gnu   # build into dist/
 scripts/smoke-test.sh x86_64-unknown-linux-gnu    # link, decode samples/, check dependencies
 ```
 
+macOS targets build on a Mac of the target's architecture, without a container:
+
+```sh
+scripts/build.sh aarch64-apple-darwin
+scripts/smoke-test.sh aarch64-apple-darwin
+```
+
 The smoke test needs cargo, a C compiler and libclang. The musl targets also need the musl
 headers (`musl-tools` on Debian and Ubuntu) and run on a glibc machine, as they do in CI.
 
 Before you push a change to a script, run `bash -n` and
-[ShellCheck](https://www.shellcheck.net/) on it, then build and smoke-test at least one glibc and
-one musl target. CI covers the rest.
+[ShellCheck](https://www.shellcheck.net/) on it, then build and smoke-test what your machine can:
+on Linux at least one glibc and one musl target. CI covers the rest.
 
 ## Updating a pinned version
 
@@ -68,6 +75,11 @@ Read the log of a green run too. These warnings are known and stay:
   compiles the upstream archive unchanged, so they are upstream's to fix.
 - `actions/download-artifact` prints Node's `DEP0005` deprecation warning. It comes from the
   action's own code.
+- On macOS, `libtool` warns about duplicate member names when it puts dav1d and zlib into
+  `libavcodec.a`. Objects from different directories share a file name, and the linker reads them
+  all.
+- The aarch64 macOS smoke test links with one linker warning about QTKit, a framework that
+  `ffmpeg-sys-next` asks for. README.md tells users about it.
 
 Any other warning is new: fix it, or add it here with the reason it stays.
 

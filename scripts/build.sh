@@ -3,7 +3,9 @@
 # It builds for the machine it runs on, so run it on the target's own
 # architecture and C library, and for a glibc target on the glibc version in
 # versions.env. scripts/build-linux.sh does that for the Linux targets by
-# running this script in the pinned container.
+# running this script in the pinned container. The macOS targets run it
+# directly, with Xcode's command line tools, GNU tar, xz, pkg-config and, on
+# x86_64, nasm installed.
 #
 # Usage: scripts/build.sh <target>
 #
@@ -27,9 +29,9 @@ case "$target" in
     aarch64-*) arch=aarch64 ;;
 esac
 case "$target" in
-    *-linux-gnu) libc=glibc ;;
-    *-linux-musl) libc=musl ;;
-    *) die "$target is not supported by this script yet" ;;
+    *-linux-gnu) os=linux libc=glibc ;;
+    *-linux-musl) os=linux libc=musl ;;
+    *-apple-darwin) os=macos ;;
 esac
 
 sources=${SOURCES_DIR:-"$REPO_ROOT/sources"}
@@ -45,34 +47,81 @@ host_arch=$(uname -m)
 [ "$host_arch" = arm64 ] && host_arch=aarch64
 [ "$host_arch" = "$arch" ] || die "$target needs a $arch machine, this one is $host_arch"
 
-export CC=gcc AR=ar
-if [ "$libc" = glibc ]; then
-    glibc=$(getconf GNU_LIBC_VERSION | cut -d' ' -f2)
-    # The libraries can need any symbol of the glibc they were compiled against.
-    [ "$glibc" = "$GLIBC_VERSION" ] ||
-        die "this machine has glibc $glibc, but $target is built against $GLIBC_VERSION (use scripts/build-linux.sh)"
-    baseline="glibc $glibc"
-else
-    # musl's ldd prints its version and exits non-zero when run without a file.
-    baseline="musl $({ ldd 2>&1 || true; } | sed -n 's/^Version //p')"
-fi
-
 # Flags for every C file of the three libraries.
 extra_cflags=""
-if [ "$arch" = x86_64 ]; then
-    # Keeps the assembler from marking GOT accesses as relaxable. Linkers
-    # older than the assembler can rewrite a marked instruction they do not
-    # know into wrong code (docs/adr/0005-no-relaxable-relocations.md).
-    extra_cflags="-Wa,-mrelax-relocations=no"
-fi
+tools="make pkg-config python3 xz"
+case "$os" in
+    linux)
+        export CC=gcc AR=ar
+        tools="$tools readelf"
+        # zlib's default "ar rc" stamps every member with the current time.
+        # The D modifier writes zeros, as FFmpeg and dav1d already do.
+        zlib_arflags=rcD
+        if [ "$libc" = glibc ]; then
+            glibc=$(getconf GNU_LIBC_VERSION | cut -d' ' -f2)
+            # The libraries can need any symbol of the glibc they were compiled against.
+            [ "$glibc" = "$GLIBC_VERSION" ] ||
+                die "this machine has glibc $glibc, but $target is built against $GLIBC_VERSION (use scripts/build-linux.sh)"
+            baseline="glibc $glibc"
+        else
+            # musl's ldd prints its version and exits non-zero when run without a file.
+            baseline="musl $({ ldd 2>&1 || true; } | sed -n 's/^Version //p')"
+        fi
+        if [ "$arch" = x86_64 ]; then
+            # Keeps the assembler from marking GOT accesses as relaxable.
+            # Linkers older than the assembler can rewrite a marked instruction
+            # they do not know into wrong code
+            # (docs/adr/0005-no-relaxable-relocations.md).
+            extra_cflags="-Wa,-mrelax-relocations=no"
+        fi
+        ;;
+    macos)
+        export CC=clang AR=ar
+        tools="$tools libtool otool"
+        # The compiler and the linker read the oldest supported macOS from here.
+        export MACOSX_DEPLOYMENT_TARGET=$MACOS_DEPLOYMENT_TARGET
+        # Makes Apple's ar and libtool write zeros instead of the current time.
+        # zlib archives with libtool here, which takes no ar flags.
+        export ZERO_AR_DATE=1
+        zlib_arflags=""
+        baseline="macOS $MACOS_DEPLOYMENT_TARGET"
+        ;;
+esac
+# Only the x86_64 builds have assembly that needs nasm. On aarch64 the C
+# compiler assembles the hand-written code.
+[ "$arch" = x86_64 ] && tools="$tools nasm"
 
-for tool in "$CC" "$AR" make nasm pkg-config python3 readelf xz; do
+for tool in "$CC" "$AR" $tools; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool not found on PATH"
 done
 
 verify_sources "$sources"
 
 mkdir -p "$work" "$out"
+
+if [ "$arch" = x86_64 ]; then
+    assembler=$(nasm --version)
+else
+    assembler="the C compiler"
+fi
+if [ "$os" = macos ] && [ "$arch" = x86_64 ]; then
+    # nasm writes the oldest macOS into an object only when the source asks
+    # for it, and the linker warns about every object without one. This puts
+    # a wrapper first on PATH that adds the request to each Mach-O object the
+    # builds assemble. Other formats, which configure probes, reject it.
+    nasm_request="build_version macos, ${MACOS_DEPLOYMENT_TARGET%%.*}, ${MACOS_DEPLOYMENT_TARGET#*.}"
+    mkdir -p "$work/tools"
+    cat >"$work/tools/nasm" <<EOF
+#!/bin/sh
+case " \$* " in
+    *" macho64 "*) exec "$(command -v nasm)" --before "$nasm_request" "\$@" ;;
+    *) exec "$(command -v nasm)" "\$@" ;;
+esac
+EOF
+    chmod +x "$work/tools/nasm"
+    PATH="$work/tools:$PATH"
+    assembler="$assembler, run with --before \"$nasm_request\" for Mach-O output"
+fi
 src=$work/src
 deps=$work/deps
 stage=$work/stage
@@ -130,10 +179,8 @@ extract "$ZLIB_ARCHIVE"
     cd "$src/zlib-$ZLIB_VERSION"
     export CFLAGS="-O3 -fPIC${extra_cflags:+ $extra_cflags}"
     RECORD_ENV="CFLAGS='$CFLAGS'" recorded zlib ./configure --static --prefix="$deps"
-    # zlib's default "ar rc" stamps every member with the current time. The D
-    # modifier writes zeros, as FFmpeg and dav1d already do.
-    make -j"$jobs" libz.a ARFLAGS=rcD
-    make install ARFLAGS=rcD
+    make -j"$jobs" libz.a ${zlib_arflags:+"ARFLAGS=$zlib_arflags"}
+    make install ${zlib_arflags:+"ARFLAGS=$zlib_arflags"}
 )
 
 # --- dav1d -------------------------------------------------------------------
@@ -159,6 +206,7 @@ ffmpeg_filters="bwdif format yadif"
 ffmpeg_protocols="file pipe"
 
 ffmpeg_flags=(
+    "--cc=$CC"
     --disable-autodetect
     --disable-iconv
     --disable-programs
@@ -272,18 +320,35 @@ done
 
 # dav1d and zlib go inside libavcodec.a, so a consumer links four FFmpeg
 # libraries and nothing else (docs/adr/0004-dav1d-and-zlib-inside-libavcodec.md).
-"$AR" -M <<EOF
+case "$os" in
+    linux)
+        "$AR" -M <<EOF
 open $pkg/lib/libavcodec.a
 addlib $deps/lib/libdav1d.a
 addlib $deps/lib/libz.a
 save
 end
 EOF
-# The script mode of ar stamps the symbol table with the current time.
-# Rewriting it with the D modifier puts zeros there.
-"$AR" sD "$pkg/lib/libavcodec.a"
+        # The script mode of ar stamps the symbol table with the current time.
+        # Rewriting it with the D modifier puts zeros there.
+        "$AR" sD "$pkg/lib/libavcodec.a"
+        ;;
+    macos)
+        libtool -static -o "$pkg/lib/libavcodec.merged.a" \
+            "$pkg/lib/libavcodec.a" "$deps/lib/libdav1d.a" "$deps/lib/libz.a"
+        mv "$pkg/lib/libavcodec.merged.a" "$pkg/lib/libavcodec.a"
+        # Every object has to record the oldest macOS it runs on, and all the
+        # same one. otool prints one "name(member):" line per object.
+        otool -l "$pkg"/lib/*.a >"$work/load-commands.txt"
+        # "|| true": grep fails when it counts none, and the check below reports it.
+        objects=$(grep -c '^.*(.*):$' "$work/load-commands.txt" || true)
+        minos=$(awk '$1 == "minos" { count[$2]++ } END { for (version in count) print count[version], version }' "$work/load-commands.txt")
+        [ "$minos" = "$objects $MACOS_DEPLOYMENT_TARGET" ] ||
+            die "expected $objects objects for macOS $MACOS_DEPLOYMENT_TARGET, found (count, version): $minos"
+        ;;
+esac
 
-if [ "$arch" = x86_64 ]; then
+if [ "$os" = linux ] && [ "$arch" = x86_64 ]; then
     # Through a file: in a pipeline, grep would stop reading at the first
     # matches and the status of the pipeline would be readelf's broken pipe.
     readelf --relocs --wide "$pkg"/lib/*.a >"$work/relocations.txt"
@@ -323,7 +388,7 @@ build revision:   $BUILD_REVISION
 runs on:          $baseline or newer
 FFmpeg licence:   $license
 C compiler:       $("$CC" --version | head -n 1)
-assembler:        $(nasm --version)
+assembler:        $assembler
 meson:            $(meson --version)
 
 Sources (name, URL, SHA-256):
