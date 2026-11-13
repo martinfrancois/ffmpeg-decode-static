@@ -130,6 +130,8 @@ Any other warning is new: fix it, or add it here with the reason it stays.
 - A build must not depend on what the machine has installed beyond the tools `scripts/build.sh`
   checks for. If FFmpeg's configure finds a library on its own, turn it off by name.
 - Archives must come out the same when the same commit is built twice. Keep timestamps, user names
-  and absolute paths out of them. The Windows archives do not meet this yet: MSVC writes the build
-  time and source paths into its objects
+  and absolute paths out of them. To check, start the workflow a second time for the newest commit
+  on `main` (`gh workflow run build.yml --ref main`) and compare the SHA-256 that each build job
+  prints when it writes its archive. The Windows archives do not meet this yet: MSVC writes the
+  build time and source paths into its objects
   ([issue 4](https://github.com/martinfrancois/ffmpeg-decode-static/issues/4)).

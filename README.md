@@ -185,10 +185,9 @@ This describes how the archives are put together. It is not legal advice.
 
 ## Reproducible archives
 
-Two builds of one commit gave byte-identical archives for both x86_64 Linux targets. The aarch64
-Linux targets and the macOS targets have not been compared yet. The Windows archives differ from
-build to build: MSVC writes the build time into every object, and the full path of the source
-file on the build machine into many of them
+Two CI builds of one commit gave byte-identical archives for all four Linux targets and both
+macOS targets. The Windows archives differ from build to build: MSVC writes the build time into
+every object, and the full path of the source file on the build machine into many of them
 ([issue 4](https://github.com/martinfrancois/ffmpeg-decode-static/issues/4)).
 
 The build is set up for it on Linux and macOS: the archive entries are sorted and carry the
