@@ -127,6 +127,9 @@ Any other warning is new: fix it, or add it here with the reason it stays.
   The one exception is `scripts/generate-samples.sh`, which writes `samples/`. The scripts also
   run on macOS, so they have to work in its bash 3.2: no associative arrays, and no expansion of
   an empty array.
+- With `pipefail`, a pipeline fails now and then when its last command stops reading early, as
+  `grep -q` and `head` do. Let that command read to the end (`grep ... >/dev/null`, `sed -n 1p`)
+  or read from a file.
 - A build must not depend on what the machine has installed beyond the tools `scripts/build.sh`
   checks for. If FFmpeg's configure finds a library on its own, turn it off by name.
 - Archives must come out the same when the same commit is built twice. Keep timestamps, user names
