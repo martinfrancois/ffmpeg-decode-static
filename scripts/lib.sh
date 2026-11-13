@@ -50,6 +50,10 @@ sha256_of() {
     fi
 }
 
+sha3_256_of() {
+    openssl dgst -sha3-256 -r "$1" | cut -d' ' -f1
+}
+
 # Fails unless the file has the expected SHA-256.
 verify_sha256() {
     local file=$1 expected=$2 actual
