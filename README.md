@@ -236,13 +236,22 @@ scripts\msvc-env.cmd smoke-test.sh x86_64-pc-windows-msvc
 The archive lands in `dist/`. [AGENTS.md](AGENTS.md) lists every command, including how to update
 a pinned version.
 
-## Maintained MPEG correction
+## Maintained MPEG corrections
 
 The FFmpeg 9.0.2 patch series rejects invalid motion VLCs in MPEG-1 and MPEG-2
 before using the returned vector. With `err_detect=explode`, the decoder returns
 InvalidData instead of producing a predicted picture from the invalid code.
-Valid signed vectors retain the upstream arithmetic. Other MPEG decoding limits,
-including coefficient saturation, are unchanged.
+Valid signed vectors retain the upstream arithmetic.
+
+Under `err_detect=explode`, the series also refuses forbidden coefficient escapes
+and inverse-quantized coefficients outside [-2048, 2047]. With full-resolution
+`idct=simple`, it refuses blocks whose row, column or rounding arithmetic exceeds
+the supported integer range. Accepted blocks retain their upstream pixels.
+Legal MPEG streams that need saturation or wider transform intermediates return
+PatchWelcome. Malformed escape syntax returns InvalidData. Consumers can distinguish
+unsupported decoding from damage through the packet/frame API. Other IDCT choices and low-resolution transforms are outside the
+transform check. [ADR 0008](docs/adr/0008-refuse-unsafe-mpeg-coefficient-arithmetic.md)
+records the alternatives, exact scope and regression controls.
 
 `versions.env` pins the reproducible patch archive digest. `scripts/package-patches.sh`
 creates it with fixed timestamps, ownership and file order. `scripts/apply-patches.sh`

@@ -1,0 +1,400 @@
+--- a/libavcodec/eatqi.c
++++ b/libavcodec/eatqi.c
+@@ -18,6 +18,9 @@
+  * License along with FFmpeg; if not, write to the Free Software
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+  */
++
++/* Modified 2026-11-18: refuse unsupported MPEG coefficient arithmetic under
++ * AV_EF_EXPLODE; preserve other users of the shared block reader. */
+
+ /**
+  * @file
+@@ -78,7 +81,7 @@
+         int ret = ff_mpeg1_decode_block_intra(&t->gb,
+                                               t->intra_matrix,
+                                               ff_zigzag_direct,
+-                                              t->last_dc, block[n], n, 1);
++                                              t->last_dc, block[n], n, 1, 0);
+         if (ret < 0) {
+             av_log(t->avctx, AV_LOG_ERROR, "ac-tex damaged at %d %d\n",
+                    t->mb_x, t->mb_y);
+--- a/libavcodec/mpeg12.c
++++ b/libavcodec/mpeg12.c
+@@ -19,6 +19,9 @@
+  * License along with FFmpeg; if not, write to the Free Software
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
++
++/* Modified 2026-11-18: refuse unsupported MPEG coefficient arithmetic under
++ * AV_EF_EXPLODE; preserve other users of the shared block reader. */
+
+ /**
+  * @file
+@@ -183,7 +186,7 @@
+ int ff_mpeg1_decode_block_intra(GetBitContext *gb,
+                                 const uint16_t *quant_matrix,
+                                 const uint8_t *scantable, int last_dc[3],
+-                                int16_t *block, int index, int qscale)
++                                int16_t *block, int index, int qscale, int check)
+ {
+     int dc, diff, i = 0, component;
+
+@@ -196,6 +199,8 @@
+     dc += diff;
+     last_dc[component] = dc;
+
++    if (check && (dc * quant_matrix[0] < -2048 || dc * quant_matrix[0] > 2047))
++        return AVERROR_INVALIDDATA;
+     block[0] = dc * quant_matrix[0];
+
+     {
+@@ -238,6 +243,8 @@
+                     SKIP_BITS(re, gb, 8);
+                 }
+
++                if (check && (level == 0 || level == -256))
++                    return AVERROR_INVALIDDATA;
+                 i += run;
+                 if (i > MAX_INDEX)
+                     break;
+@@ -254,6 +261,8 @@
+                 }
+             }
+
++            if (check && (level < -2048 || level > 2047))
++                return AVERROR_PATCHWELCOME;
+             block[j] = level;
+             if (((int32_t)GET_CACHE(re, gb)) <= (int32_t)0xBFFFFFFF)
+                break;
+--- a/libavcodec/mpeg12dec.c
++++ b/libavcodec/mpeg12dec.c
+@@ -23,6 +23,9 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
+
++/* Modified 2026-11-18: refuse unsupported MPEG coefficient arithmetic under
++ * AV_EF_EXPLODE; preserve other users of the shared block reader. */
++
+ /**
+  * @file
+  * MPEG-1/2 decoder
+@@ -144,9 +147,17 @@
+         }                                                                     \
+     } while (0)
+
++/* VCR2 shares MPEG-2's codec ID but retains its existing decoding policy. */
++static int mpeg12_check_coefficients(const Mpeg12SliceContext *s)
++{
++    return (s->c.avctx->err_recognition & AV_EF_EXPLODE) &&
++           s->c.codec_tag != AV_RL32("VCR2");
++}
++
+ static inline int mpeg1_decode_block_inter(Mpeg12SliceContext *const s,
+                                            int16_t *block, int n)
+ {
++    const int check = mpeg12_check_coefficients(s);
+     int level, i, j, run;
+     const uint8_t *const scantable = s->c.intra_scantable.permutated;
+     const uint16_t *quant_matrix = s->c.inter_matrix;
+@@ -162,6 +173,8 @@
+             level = (level - 1) | 1;
+             if (GET_CACHE(re, &s->gb) & 0x40000000)
+                 level = -level;
++            if (check && (level < -2048 || level > 2047))
++                return AVERROR_PATCHWELCOME;
+             block[0] = level;
+             i++;
+             SKIP_BITS(re, &s->gb, 2);
+@@ -197,6 +210,8 @@
+                     level = SHOW_UBITS(re, &s->gb, 8);
+                     SKIP_BITS(re, &s->gb, 8);
+                 }
++                if (check && (level == 0 || level == -256))
++                    return AVERROR_INVALIDDATA;
+                 i += run;
+                 if (i > MAX_INDEX)
+                     break;
+@@ -212,6 +227,8 @@
+                 }
+             }
+
++            if (check && (level < -2048 || level > 2047))
++                return AVERROR_PATCHWELCOME;
+             block[j] = level;
+             if (((int32_t) GET_CACHE(re, &s->gb)) <= (int32_t) 0xBFFFFFFF)
+                 break;
+@@ -231,6 +248,7 @@
+ static inline int mpeg2_decode_block_non_intra(Mpeg12SliceContext *const s,
+                                                int16_t *block, int n)
+ {
++    const int check = mpeg12_check_coefficients(s);
+     int level, i, j, run;
+     const uint8_t *const scantable = s->c.intra_scantable.permutated;
+     const uint16_t *quant_matrix;
+@@ -253,6 +271,8 @@
+             level = (3 * qscale * quant_matrix[0]) >> 5;
+             if (GET_CACHE(re, &s->gb) & 0x40000000)
+                 level = -level;
++            if (check && (level < -2048 || level > 2047))
++                return AVERROR_PATCHWELCOME;
+             block[0]  = level;
+             mismatch ^= level;
+             i++;
+@@ -281,6 +301,8 @@
+                 LAST_SKIP_BITS(re, &s->gb, 6);
+                 UPDATE_CACHE(re, &s->gb);
+                 level = SHOW_SBITS(re, &s->gb, 12);
++                if (check && (level == 0 || level == -2048))
++                    return AVERROR_INVALIDDATA;
+                 SKIP_BITS(re, &s->gb, 12);
+
+                 i += run;
+@@ -295,6 +317,8 @@
+                 }
+             }
+
++            if (check && (level < -2048 || level > 2047))
++                return AVERROR_PATCHWELCOME;
+             mismatch ^= level;
+             block[j]  = level;
+             if (((int32_t) GET_CACHE(re, &s->gb)) <= (int32_t) 0xBFFFFFFF)
+@@ -316,6 +340,8 @@
+ static inline int mpeg2_decode_block_intra(Mpeg12SliceContext *const s,
+                                            int16_t *block, int n)
+ {
++    const int check = s->c.codec_id == AV_CODEC_ID_MPEG2VIDEO &&
++                      mpeg12_check_coefficients(s);
+     int level, dc, diff, i, j, run;
+     int component;
+     const RL_VLC_ELEM *rl_vlc;
+@@ -336,7 +362,10 @@
+     dc  = s->last_dc[component];
+     dc += diff;
+     s->last_dc[component] = dc;
+-    block[0] = dc * (1 << (3 - s->c.intra_dc_precision));
++    level = dc * (1 << (3 - s->c.intra_dc_precision));
++    if (check && (level < -2048 || level > 2047))
++        return AVERROR_INVALIDDATA;
++    block[0] = level;
+     ff_tlog(s->c.avctx, "dc=%d\n", block[0]);
+     mismatch = block[0] ^ 1;
+     i = 0;
+@@ -369,6 +398,8 @@
+                 run = SHOW_UBITS(re, &s->gb, 6) + 1;
+                 SKIP_BITS(re, &s->gb, 6);
+                 level = SHOW_SBITS(re, &s->gb, 12);
++                if (check && (level == 0 || level == -2048))
++                    return AVERROR_INVALIDDATA;
+                 LAST_SKIP_BITS(re, &s->gb, 12);
+                 i += run;
+                 if (i > MAX_INDEX)
+@@ -382,6 +413,8 @@
+                 }
+             }
+
++            if (check && (level < -2048 || level > 2047))
++                return AVERROR_PATCHWELCOME;
+             mismatch ^= level;
+             block[j]  = level;
+         }
+@@ -391,6 +424,79 @@
+
+     check_scantable_index(s, i);
+
++    return 0;
++}
++
++/* The simple 8-bit IDCT uses these fixed-point sums in its C and x86 paths.
++ * Compute them wide before any 16-bit row store or 32-bit column arithmetic.
++ * This only decides whether the existing transform can run; it changes no pixel.
++ */
++static void mpeg12_idct_sums(const int64_t *v, int64_t bias, int64_t *out)
++{
++    int64_t a0 = 16383 * v[0] + bias;
++    int64_t a1 = a0, a2 = a0, a3 = a0;
++    int64_t b0, b1, b2, b3;
++
++    a0 += 21407 * v[2] + 16383 * v[4] + 8867 * v[6];
++    a1 +=  8867 * v[2] - 16383 * v[4] - 21407 * v[6];
++    a2 += -8867 * v[2] - 16383 * v[4] + 21407 * v[6];
++    a3 += -21407 * v[2] + 16383 * v[4] - 8867 * v[6];
++    b0 = 22725 * v[1] + 19266 * v[3] + 12873 * v[5] + 4520 * v[7];
++    b1 = 19266 * v[1] - 4520 * v[3] - 22725 * v[5] - 12873 * v[7];
++    b2 = 12873 * v[1] - 22725 * v[3] + 4520 * v[5] + 19266 * v[7];
++    b3 = 4520 * v[1] - 12873 * v[3] + 19266 * v[5] - 22725 * v[7];
++    out[0] = a0 + b0;
++    out[7] = a0 - b0;
++    out[1] = a1 + b1;
++    out[6] = a1 - b1;
++    out[2] = a2 + b2;
++    out[5] = a2 - b2;
++    out[3] = a3 + b3;
++    out[4] = a3 - b3;
++}
++
++static int mpeg12_check_idct(const int16_t *block, const uint8_t *permutation)
++{
++    int64_t rows[64], v[8], sums[8];
++    unsigned magnitude = 0;
++    int x, y;
++
++    for (x = 0; x < 64; x++)
++        magnitude += FFABS(block[x]);
++    /* With total magnitude <= 2047, the largest row factor (22725),
++     * its 11-bit shift and rounding bound every row below 22725. Applying
++     * the column factors to their sum stays below 2^30, including rounding.
++     * Larger blocks get the exact checks below, not a magnitude rejection.
++     */
++    if (magnitude <= 2047)
++        return 0;
++    for (y = 0; y < 8; y++) {
++        int ac = 0;
++        for (x = 0; x < 8; x++) {
++            v[x] = block[permutation[y * 8 + x]];
++            if (x)
++                ac |= v[x] != 0;
++        }
++        mpeg12_idct_sums(v, 1024, sums);
++        for (x = 0; x < 8; x++) {
++            /* Keep the existing DC-only shortcut, including its rounding. */
++            int64_t value = ac ? sums[x] >> 11 : v[0] * 8;
++            if (value < INT16_MIN || value > INT16_MAX)
++                return AVERROR_PATCHWELCOME;
++            rows[y * 8 + x] = value;
++        }
++    }
++    for (x = 0; x < 8; x++) {
++        for (y = 0; y < 8; y++)
++            v[y] = rows[y * 8 + x];
++        /* x86 adds the rounding offset as a signed 16-bit value first. */
++        if (v[0] > INT16_MAX - 32)
++            return AVERROR_PATCHWELCOME;
++        mpeg12_idct_sums(v, 16383 * 32, sums);
++        for (y = 0; y < 8; y++)
++            if (sums[y] < INT32_MIN || sums[y] > INT32_MAX)
++                return AVERROR_PATCHWELCOME;
++    }
+     return 0;
+ }
+
+@@ -529,10 +635,12 @@
+                                                   s->c.intra_matrix,
+                                                   s->c.intra_scantable.permutated,
+                                                   s->last_dc, s->block[i],
+-                                                  i, s->c.qscale);
++                                                  i, s->c.qscale,
++                                                  mpeg12_check_coefficients(s));
+                 if (ret < 0) {
+-                    av_log(s->c.avctx, AV_LOG_ERROR, "ac-tex damaged at %d %d\n",
+-                           s->c.mb_x, s->c.mb_y);
++                    if (ret != AVERROR_PATCHWELCOME)
++                        av_log(s->c.avctx, AV_LOG_ERROR, "ac-tex damaged at %d %d\n",
++                               s->c.mb_x, s->c.mb_y);
+                     return ret;
+                 }
+             }
+@@ -783,6 +891,17 @@
+         }
+     }
+
++    if (mpeg12_check_coefficients(s) &&
++        s->c.avctx->idct_algo == FF_IDCT_SIMPLE && !s->c.avctx->lowres) {
++        for (i = 0; i < mb_block_count; i++) {
++            if (s->c.mb_intra || s->c.block_last_index[i] >= 0) {
++                ret = mpeg12_check_idct(s->block[i], s->c.idsp.idct_permutation);
++                if (ret < 0)
++                    return ret;
++            }
++        }
++    }
++
+     s->c.cur_pic.mb_type[s->c.mb_x + s->c.mb_y * s->c.mb_stride] = mb_type;
+
+     return 0;
+@@ -2222,17 +2341,24 @@
+     return 0;
+ }
+
+-static void mpeg12_execute_slice_threads(AVCodecContext *avctx,
++static int mpeg12_execute_slice_threads(AVCodecContext *avctx,
+                                          Mpeg1Context *const s)
+ {
+     if (HAVE_THREADS && (avctx->active_thread_type & FF_THREAD_SLICE) &&
+         !avctx->hwaccel) {
+         MPVContext *const s2 = &s->slice.c;
+         int error_count = 0;
++        int results[MAX_THREADS] = { 0 };
+
+         avctx->execute(avctx, slice_decode_thread,
+-                       s2->mpeg12_contexts, NULL,
++                       s2->mpeg12_contexts, results,
+                        s->slice_count, sizeof(s2->mpeg12_contexts[0]));
++
++        /* Keep unsupported arithmetic distinct from malformed syntax. */
++        if (avctx->err_recognition & AV_EF_EXPLODE)
++            for (int i = 0; i < s->slice_count; i++)
++                if (results[i] < 0)
++                    return results[i];
+
+         for (int i = 0; i < s->slice_count; i++) {
+             MpegEncContext *const slice = s2->thread_context[i];
+@@ -2249,6 +2375,7 @@
+         atomic_store_explicit(&s2->er.error_count, error_count,
+                               memory_order_relaxed);
+     }
++    return 0;
+ }
+
+ static int decode_chunks(AVCodecContext *avctx, AVFrame *picture,
+@@ -2268,7 +2395,9 @@
+         buf_ptr = avpriv_find_start_code(buf_ptr, buf_end, &start_code);
+         if (start_code > 0x1ff) {
+             if (!skip_frame) {
+-                mpeg12_execute_slice_threads(avctx, s);
++                ret = mpeg12_execute_slice_threads(avctx, s);
++                if (ret < 0)
++                    return ret;
+
+                 ret = slice_end(avctx, picture, got_output);
+                 if (ret < 0)
+@@ -2328,7 +2457,9 @@
+                 s2->intra_matrix[0]= 1;
+             }
+             if (s->slice_count) {
+-                mpeg12_execute_slice_threads(avctx, s);
++                ret = mpeg12_execute_slice_threads(avctx, s);
++                if (ret < 0)
++                    return ret;
+                 s->slice_count = 0;
+             }
+             if (last_code == 0 || last_code == SLICE_MIN_START_CODE) {
+@@ -2843,7 +2974,7 @@
+                                                       m->intra_matrix,
+                                                       m->intra_scantable.permutated,
+                                                       s->m.last_dc, block[n],
+-                                                      n, m->qscale);
++                                                      n, m->qscale, 0);
+                 } else {
+                     ret = mpeg2_decode_block_intra(&s->m, block[n], n);
+                 }
+--- a/libavcodec/mpeg12dec.h
++++ b/libavcodec/mpeg12dec.h
+@@ -18,6 +18,9 @@
+  * License along with FFmpeg; if not, write to the Free Software
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
++
++/* Modified 2026-11-18: refuse unsupported MPEG coefficient arithmetic under
++ * AV_EF_EXPLODE; preserve other users of the shared block reader. */
+
+ #ifndef AVCODEC_MPEG12DEC_H
+ #define AVCODEC_MPEG12DEC_H
+@@ -47,6 +50,6 @@
+ int ff_mpeg1_decode_block_intra(GetBitContext *gb,
+                                 const uint16_t *quant_matrix,
+                                 const uint8_t *scantable, int last_dc[3],
+-                                int16_t *block, int index, int qscale);
++                                int16_t *block, int index, int qscale, int check);
+
+ #endif /* AVCODEC_MPEG12DEC_H */

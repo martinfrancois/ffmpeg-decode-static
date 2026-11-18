@@ -8,7 +8,11 @@ use ffmpeg_next as ffmpeg;
 
 type DecodeResult = Result<(usize, u64), (&'static str, ffmpeg::Error)>;
 
-fn decode(path: &Path) -> DecodeResult {
+pub(super) fn decode(path: &Path) -> DecodeResult {
+    decode_with_threads(path, 1)
+}
+
+pub(super) fn decode_with_threads(path: &Path, threads: usize) -> DecodeResult {
     let mut input = format::input(path).map_err(|error| ("open input", error))?;
     let stream = input
         .streams()
@@ -22,7 +26,8 @@ fn decode(path: &Path) -> DecodeResult {
     let mut options = Dictionary::new();
     options.set("idct", "simple");
     options.set("flags", "+bitexact");
-    options.set("threads", "1");
+    options.set("threads", &threads.to_string());
+    options.set("thread_type", "slice");
     options.set("err_detect", "+crccheck+buffer+compliant+explode");
     let mut decoder = context
         .decoder()

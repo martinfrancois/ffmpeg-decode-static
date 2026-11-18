@@ -7,6 +7,7 @@
 //! `ffmpeg -idct simple -i FILE -map 0:v:0 -fps_mode passthrough -f hash -hash sha256 -`).
 //! `anim.webp` is the exception, see its entry.
 
+mod mpeg_coefficients;
 mod mpeg_motion;
 
 use std::ffi::CStr;
@@ -610,12 +611,13 @@ fn main() -> ExitCode {
 
     report("libraries", check_libraries());
     report("MPEG motion codes", mpeg_motion::check(directory));
+    report("MPEG coefficients", mpeg_coefficients::check(directory));
     for sample in SAMPLES {
         report(sample.file, check_sample(directory, sample));
     }
 
     if failures == 0 {
-        println!("all {} checks passed", SAMPLES.len() + 2);
+        println!("all {} checks passed", SAMPLES.len() + 3);
         ExitCode::SUCCESS
     } else {
         println!("{failures} checks failed");
