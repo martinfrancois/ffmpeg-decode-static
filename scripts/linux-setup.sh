@@ -4,12 +4,12 @@
 # shellcheck shell=sh
 
 if [ -f /etc/alpine-release ]; then
-    apk add --no-cache bash binutils gcc make musl-dev nasm pkgconf python3 tar xz >&2
+    apk add --no-cache bash binutils gcc make patch musl-dev nasm pkgconf python3 tar xz >&2
 elif [ -f /etc/almalinux-release ]; then
     # GCC 14 is the newest compiler series that both AlmaLinux 8 and the
     # manylinux_2_28 images carry. nasm is in the powertools repository.
     dnf --quiet --assumeyes --enablerepo=powertools install \
-        diffutils findutils gcc-toolset-14-binutils gcc-toolset-14-gcc make nasm \
+        diffutils findutils gcc-toolset-14-binutils gcc-toolset-14-gcc make patch nasm \
         pkgconf-pkg-config python3.12 tar xz >&2
     # The enable script reads variables that may be unset.
     set +u

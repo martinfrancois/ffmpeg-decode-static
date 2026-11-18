@@ -6,8 +6,8 @@
 #
 # <tag> is v<FFmpeg version>-<build number>, for example v9.0.2-1.
 # [directory] (default: dist/release) must hold the archive of every target
-# and the three source archives, and nothing else. The script writes
-# checksums.txt into it.
+# and the three upstream source archives plus the patch archive, and nothing else.
+# The script writes checksums.txt into it.
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -32,6 +32,7 @@ expected=$(
         for target in $ALL_TARGETS; do
             printf 'ffmpeg-decode-static-%s.tar.xz\n' "$target"
         done
+        printf '%s\n' "$FFMPEG_PATCH_ARCHIVE"
         source_table | cut -d' ' -f2
     } | LC_ALL=C sort
 )
@@ -41,6 +42,10 @@ if [ "$actual" != "$expected" ]; then
     die "$dir does not hold exactly the files of a release"
 fi
 verify_sources "$dir"
+verify_patch_directory "$REPO_ROOT/patches/ffmpeg-$FFMPEG_VERSION"
+for target in $ALL_TARGETS; do
+    verify_embedded_patches "$dir/ffmpeg-decode-static-$target.tar.xz"
+done
 
 # The format that "cksum --tag" writes, so "cksum --check" reads both digests.
 # Each digest goes through a variable, so a failing tool stops the script.
@@ -82,6 +87,8 @@ while read -r _ name url sha; do
     printf '| `%s` | %s | `%s` |\n' "$name" "$url" "$sha"
 done < <(source_table)
 cat <<EOF_NOTES
+
+The source modifications are in \`$FFMPEG_PATCH_ARCHIVE\` (SHA-256 \`$FFMPEG_PATCH_SHA256\`). The original archives above remain unchanged. Each library archive embeds the same patch series, before/after file hashes and reconstruction instructions in \`patches/\`; BUILD-INFO records its application.
 
 ## Checksums
 

@@ -131,7 +131,9 @@ else
     cc_version=$cl_banner
 fi
 
+gnu_patch --version >/dev/null
 verify_sources "$sources"
+verify_patch_directory "$REPO_ROOT/patches/ffmpeg-$FFMPEG_VERSION"
 
 mkdir -p "$work" "$out"
 
@@ -320,6 +322,9 @@ if [ -n "$extra_cflags" ]; then
 fi
 
 extract "$FFMPEG_ARCHIVE"
+mkdir -p "$src/patches"
+gnu_tar -xf "$sources/$FFMPEG_PATCH_ARCHIVE" -C "$src/patches"
+"$REPO_ROOT/scripts/apply-patches.sh" "$src/ffmpeg-$FFMPEG_VERSION" "$src/patches"
 ffmpeg_src=$src/ffmpeg-$FFMPEG_VERSION
 (
     cd "$ffmpeg_src"
@@ -478,6 +483,7 @@ if grep -n -e "$work" -e "$work_native" -e dav1d -e ' -lz' -e ' zlib\.lib' "$pkg
     die "a pkg-config file still names a build path or a merged library"
 fi
 
+cp -R "$src/patches" "$pkg/patches"
 cp "$ffmpeg_src/COPYING.LGPLv2.1" "$pkg/licenses/FFmpeg-COPYING.LGPLv2.1"
 cp "$ffmpeg_src/LICENSE.md" "$pkg/licenses/FFmpeg-LICENSE.md"
 cp "$src/dav1d-$DAV1D_VERSION/COPYING" "$pkg/licenses/dav1d-COPYING"
@@ -501,6 +507,10 @@ EOF
     while read -r _ name url sha; do
         printf '  %s\n    %s\n    %s\n' "$name" "$url" "$sha"
     done < <(source_table)
+    printf '\nPatch archive: %s\nSHA-256: %s\n' "$FFMPEG_PATCH_ARCHIVE" "$FFMPEG_PATCH_SHA256"
+    printf 'Apply after extraction: scripts/apply-patches.sh ffmpeg-%s patches\n' "$FFMPEG_VERSION"
+    printf 'Patch series, SHA-256 and name:\n'
+    cat "$src/patches/series"
     cat <<EOF
 
 $(lib_file avcodec) also holds the objects of dav1d and zlib. The licence of each
@@ -519,7 +529,7 @@ archive=$out/ffmpeg-decode-static-$target.tar.xz
     gnu_tar --sort=name --format=ustar \
         --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
         --mode='u=rwX,go=rX' \
-        -cf - BUILD-INFO include lib licenses
+        -cf - BUILD-INFO include lib licenses patches
 ) | xz -9 --threads=1 >"$archive"
 
 log "wrote $archive ($(wc -c <"$archive") bytes, sha256 $(sha256_of "$archive"))"

@@ -57,13 +57,16 @@ Renovate opens the pull request for a new version of FFmpeg, dav1d or zlib and l
 because it cannot compute a source checksum. CI fails on it until you push the checksum to its
 branch:
 
-1. Run `scripts/fetch-sources.sh --print-checksums` and copy the changed `*_SHA256` line into
+1. For an FFmpeg version change, rebase and review `patches/ffmpeg-<version>/` and its
+   before/after file hashes. Update `FFMPEG_PATCH_SHA256` for the deterministic archive.
+   A version bump must not drop the patch.
+2. Run `scripts/fetch-sources.sh --print-checksums` and copy the changed `*_SHA256` line into
    `versions.env`.
-2. Compare that value with what upstream publishes before you commit it. FFmpeg signs its
+3. Compare that value with what upstream publishes before you commit it. FFmpeg signs its
    archives (`gpg --verify` against the `.asc` file next to the archive, key
    `FCF986EA15E6E293A5644F10B4322F04D67658D8`). dav1d publishes a `.sha256` file next to the
    archive. zlib's GitHub release shows a SHA-256 digest for each asset.
-3. An FFmpeg update is only possible within what the `ffmpeg-next` version in
+4. An FFmpeg update is only possible within what the `ffmpeg-next` version in
    `smoke-test/Cargo.toml` supports. Check the crate's release notes, and update the crate in the
    same pull request if FFmpeg moves to a new minor version.
 
@@ -106,7 +109,7 @@ Read the log of a green run too. These warnings are known and stay:
 
 - FFmpeg's own sources give about 230 compiler warnings per Linux target (`-Wstringop-overflow`,
   `-Wstack-usage`, `-Wimplicit-fallthrough`, `-Wunused-function`, `-Warray-bounds`). The build
-  compiles the upstream archive unchanged, so they are upstream's to fix.
+  applies the verified MPEG motion-code patch; these pre-existing warnings remain upstream's to fix.
 - `actions/download-artifact` prints Node's `DEP0005` deprecation warning. It comes from the
   action's own code.
 - On macOS, `libtool` warns about duplicate member names when it puts dav1d and zlib into

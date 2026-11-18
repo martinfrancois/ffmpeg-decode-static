@@ -3,7 +3,7 @@
 # program in smoke-test/ against it, runs it on samples/ and checks that the
 # binary loads no FFmpeg, dav1d or zlib shared library.
 #
-# Needs cargo with the target's Rust toolchain, a C compiler and libclang
+# Needs Python 3, cargo with the target's Rust toolchain, a C compiler and libclang
 # (ffmpeg-sys-next generates its bindings with bindgen at build time). It runs
 # on the target's own kind of machine, except for the musl targets, which
 # build on a glibc machine with the musl headers installed. On Windows, run it
@@ -35,6 +35,9 @@ gnu_tar -xf "$archive" -C "$work/ffmpeg"
 for entry in BUILD-INFO include lib/pkgconfig licenses/FFmpeg-COPYING.LGPLv2.1 licenses/dav1d-COPYING licenses/zlib-LICENSE; do
     [ -e "$work/ffmpeg/$entry" ] || die "the archive has no $entry"
 done
+
+verify_patch_directory "$work/ffmpeg/patches"
+verify_embedded_patches "$archive"
 
 log "building the smoke test for $target"
 # cargo runs in smoke-test/ so that rustup picks up its rust-toolchain.toml.

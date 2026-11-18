@@ -6,6 +6,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$REPO_ROOT/versions.env"
 
 FFMPEG_ARCHIVE="ffmpeg-$FFMPEG_VERSION.tar.xz"
+FFMPEG_PATCH_ARCHIVE="ffmpeg-$FFMPEG_VERSION-patches.tar"
 FFMPEG_URL="https://ffmpeg.org/releases/$FFMPEG_ARCHIVE"
 DAV1D_ARCHIVE="dav1d-$DAV1D_VERSION.tar.xz"
 DAV1D_URL="https://downloads.videolan.org/pub/videolan/dav1d/$DAV1D_VERSION/$DAV1D_ARCHIVE"
@@ -70,6 +71,7 @@ verify_sources() {
         [ -f "$dir/$name" ] || die "$dir/$name is missing, run scripts/fetch-sources.sh"
         verify_sha256 "$dir/$name" "$sha"
     done < <(source_table)
+    verify_sha256 "$dir/$FFMPEG_PATCH_ARCHIVE" "$FFMPEG_PATCH_SHA256"
 }
 
 # podman if it is installed, docker otherwise, unless the caller chose.
@@ -129,4 +131,52 @@ gnu_tar() {
     else
         die "GNU tar not found (on macOS: brew install gnu-tar)"
     fi
+}
+
+# Fixed metadata makes the patch archive independent of checkout times and IDs.
+pack_patches() {
+    local python
+    if command -v python3 >/dev/null 2>&1; then python=python3; else python=python; fi
+    "$python" "$REPO_ROOT/scripts/make-patch-archive.py" "$1"
+}
+
+verify_patch_directory() {
+    local dir=$1 actual
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(pack_patches "$dir" | sha256sum | cut -d' ' -f1)
+    else
+        actual=$(pack_patches "$dir" | shasum -a 256 | cut -d' ' -f1)
+    fi
+    [ "$actual" = "$FFMPEG_PATCH_SHA256" ] ||
+        die "cannot verify patch directory \"$dir\": expected SHA-256 $FFMPEG_PATCH_SHA256, got $actual"
+}
+
+gnu_patch() {
+    if command -v gpatch >/dev/null 2>&1; then
+        gpatch "$@"
+    elif patch --version 2>/dev/null | grep 'GNU patch' >/dev/null; then
+        patch "$@"
+    else
+        die 'cannot apply patches "patch": install GNU patch, or gpatch on macOS'
+    fi
+}
+
+# Release validation checks embedded source modifications without extracting a
+# library archive over the checkout or trusting its own manifest as the pin.
+verify_embedded_patches() {
+    local archive=$1 file actual info
+    info=$(gnu_tar -xOf "$archive" BUILD-INFO)
+    grep -Fx "Patch archive: $FFMPEG_PATCH_ARCHIVE" <<<"$info" >/dev/null ||
+        die "cannot verify patch provenance \"$archive\": missing patch archive name"
+    grep -Fx "SHA-256: $FFMPEG_PATCH_SHA256" <<<"$info" >/dev/null ||
+        die "cannot verify patch provenance \"$archive\": wrong patch archive digest"
+    for file in "$REPO_ROOT/patches/ffmpeg-$FFMPEG_VERSION/"*; do
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(gnu_tar -xOf "$archive" "patches/$(basename "$file")" | sha256sum | cut -d' ' -f1)
+        else
+            actual=$(gnu_tar -xOf "$archive" "patches/$(basename "$file")" | shasum -a 256 | cut -d' ' -f1)
+        fi
+        [ "$actual" = "$(sha256_of "$file")" ] ||
+            die "cannot verify embedded patch \"$file\": expected the pinned source material"
+    done
 }

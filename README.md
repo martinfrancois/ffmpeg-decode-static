@@ -12,7 +12,7 @@ passed.
 ## Download
 
 Each [release](https://github.com/martinfrancois/ffmpeg-decode-static/releases) has one archive
-per target, the three source archives the libraries were built from, and `checksums.txt`. A
+per target, the three upstream source archives, the FFmpeg patch archive and `checksums.txt`. A
 release is named `v<FFmpeg version>-<build number>`, for example `v9.0.2-1`. The build number goes
 up when the same FFmpeg version is built again, for example after a dav1d update.
 
@@ -176,9 +176,11 @@ If you ship a program that links these libraries, the LGPL asks you to let your 
 FFmpeg part. Three things make that possible:
 
 - Every release carries the source archives of FFmpeg, dav1d and zlib that its libraries were
-  built from, unchanged from upstream.
+  built from, unchanged from upstream, plus the checksum-pinned FFmpeg patch archive.
+  Each library archive also includes the patch series and reconstruction instructions in `patches/`.
 - `BUILD-INFO` in every archive names the upstream URL and SHA-256 of each source archive and the
-  full configure command of each library.
+  full configure command of each library. It also records the patch archive digest and
+  application command. Modified source files carry a dated notice.
 - The build scripts are in this repository, and `BUILD-INFO` names the revision that ran.
 
 This describes how the archives are put together. It is not legal advice.
@@ -202,8 +204,8 @@ versions that ran.
 
 ## Build it yourself
 
-You need podman or docker for the Linux targets. The machine's architecture has to match the
-target's.
+Source packaging and archive verification need Python 3 on every platform. Linux builds need
+podman or docker, on a machine whose architecture matches the target.
 
 ```sh
 scripts/fetch-sources.sh
@@ -211,8 +213,9 @@ scripts/build-linux.sh x86_64-unknown-linux-gnu
 scripts/smoke-test.sh x86_64-unknown-linux-gnu
 ```
 
-The macOS targets build on a Mac with Xcode's command line tools, GNU tar, xz and pkg-config, plus
-nasm on an Intel Mac. [Homebrew](https://brew.sh/) has the last four.
+The macOS targets build on a Mac with Xcode's command line tools, GNU tar, GNU patch, xz and
+pkg-config, plus nasm on an Intel Mac. [Homebrew](https://brew.sh/) provides these tools; GNU
+patch is named `gpatch`.
 
 ```sh
 scripts/fetch-sources.sh
@@ -221,7 +224,7 @@ scripts/smoke-test.sh aarch64-apple-darwin
 ```
 
 The Windows targets build on Windows with Visual Studio 2022 and its C++ tools, Python 3, and
-[MSYS2](https://www.msys2.org/) in `C:\msys64` with the packages `make`, `diffutils`, `nasm` and
+[MSYS2](https://www.msys2.org/) in `C:\msys64` with the packages `make`, `diffutils`, `patch`, `nasm` and
 `pkgconf`. From a command prompt in the repository:
 
 ```bat
@@ -232,3 +235,19 @@ scripts\msvc-env.cmd smoke-test.sh x86_64-pc-windows-msvc
 
 The archive lands in `dist/`. [AGENTS.md](AGENTS.md) lists every command, including how to update
 a pinned version.
+
+## Maintained MPEG correction
+
+The FFmpeg 9.0.2 patch series rejects invalid motion VLCs in MPEG-1 and MPEG-2
+before using the returned vector. With `err_detect=explode`, the decoder returns
+InvalidData instead of producing a predicted picture from the invalid code.
+Valid signed vectors retain the upstream arithmetic. Other MPEG decoding limits,
+including coefficient saturation, are unchanged.
+
+`versions.env` pins the reproducible patch archive digest. `scripts/package-patches.sh`
+creates it with fixed timestamps, ownership and file order. `scripts/apply-patches.sh`
+checks that digest, every patch digest, the source version, and before/after hashes
+of changed files. A failed check stops the build. On an FFmpeg update, rebase and
+review the series and its file hashes before updating the archive digest.
+[ADR 0007](docs/adr/0007-verified-mpeg-motion-code-patch.md) records the maintenance
+and distribution decision. The smoke test exercises the built libraries on all targets.
