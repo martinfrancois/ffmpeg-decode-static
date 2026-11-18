@@ -1,1 +1,2 @@
 4344b83c0a77b7b4836739cdf7fca0248b32b09d5fabba4831b451142ef7b013  0001-reject-invalid-mpeg-motion-codes.patch
+705bfe7679676c916b78cbb118dac5502417e25a9482924f6df822f4d8a0ee8e  0002-refuse-unsafe-mpeg-coefficients.patch
