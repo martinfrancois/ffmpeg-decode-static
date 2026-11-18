@@ -43,6 +43,7 @@ jobs:
         run: scripts/fetch-sources.sh
       - name: Verify patch packaging and refusal checks
         run: |
+          python3 tests/patch-archive.py
           . versions.env
           bash tests/patches.sh "sources/ffmpeg-$FFMPEG_VERSION.tar.xz"
           bash tests/release-patches.sh sources
@@ -124,7 +125,9 @@ jobs:
       - name: Build with MSVC
         if: runner.os == 'Windows'
         shell: cmd
-        run: scripts\msvc-env.cmd build.sh %TARGET%
+        run: |
+          python tests\patch-archive.py || exit /b 1
+          scripts\msvc-env.cmd build.sh %TARGET%
 
       # bindgen reads the C library headers of the target, and the runner
       # only has the glibc ones.
