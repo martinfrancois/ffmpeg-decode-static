@@ -32,7 +32,30 @@ unmodified build. They do not come from the corrected smoke test itself. All
 four streams were decoded by the unmodified library; the invalid twins had no
 reported errors. The corrected library refuses both invalid twins.
 
-Direct macroblock tests during patch development exercised all ten callers,
-including field, 16x8, dual-prime and concealment vectors, with negative-vector
-controls. These committed stream fixtures cover frame-coded MPEG-1/2 B pictures.
-They do not establish complete-stream coverage of those other prediction modes.
+The retained [direct macroblock test](../../tests/mpeg-motion-branches.c) exercises
+all ten motion-reader call sites. On Linux, with Clang and an existing native,
+in-tree static FFmpeg build, run from the repository root:
+
+```sh
+bash tests/mpeg-motion-branches.sh /path/to/patched/ffmpeg-source
+```
+
+The source directory must contain the final patched sources, configure output,
+and built libavformat, libavcodec and libavutil archives. A minimal build with
+MPEG-1/2 decoding is sufficient. Use the build's compiler via `CC` if needed.
+The runner checks the patched file hashes against this checkout's manifest,
+compiles only the test, and removes its temporary output under `build/`.
+It does not configure or rebuild FFmpeg, or modify the supplied source tree.
+
+The test includes production `mpeg12dec.c` and calls `mpeg_decode_mb` directly.
+Its 35 cases comprise 20 invalid component positions, eight legal negative-vector
+controls and seven direct motion-helper checks. Invalid macroblocks must return
+InvalidData and stop at the invalid VLC; controls must retain the negative vector
+and consume the expected bits. Modes include frame, field-picture 16x8, field
+prediction in frame and field pictures, dual-prime in frame and field pictures,
+and intra concealment in frame and field pictures. The helper checks also cover
+predictor wrapping and residual bits.
+
+These direct tests do not exercise complete demux, slice or thread propagation
+for each mode or every list/field combination. The stream fixtures above cover
+frame-coded MPEG-1/2 B pictures.
