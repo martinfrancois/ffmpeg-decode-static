@@ -9,6 +9,7 @@
 
 mod mpeg_coefficients;
 mod mpeg_motion;
+mod mpeg_quantiser;
 
 use std::ffi::CStr;
 use std::path::Path;
@@ -612,12 +613,16 @@ fn main() -> ExitCode {
     report("libraries", check_libraries());
     report("MPEG motion codes", mpeg_motion::check(directory));
     report("MPEG coefficients", mpeg_coefficients::check(directory));
+    report(
+        "MPEG macroblock quantiser",
+        mpeg_quantiser::check(directory),
+    );
     for sample in SAMPLES {
         report(sample.file, check_sample(directory, sample));
     }
 
     if failures == 0 {
-        println!("all {} checks passed", SAMPLES.len() + 3);
+        println!("all {} checks passed", SAMPLES.len() + 4);
         ExitCode::SUCCESS
     } else {
         println!("{failures} checks failed");

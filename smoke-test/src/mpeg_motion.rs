@@ -13,6 +13,10 @@ pub(super) fn decode(path: &Path) -> DecodeResult {
 }
 
 pub(super) fn decode_with_threads(path: &Path, threads: usize) -> DecodeResult {
+    decode_with_policy(path, threads, true)
+}
+
+pub(super) fn decode_with_policy(path: &Path, threads: usize, strict: bool) -> DecodeResult {
     let mut input = format::input(path).map_err(|error| ("open input", error))?;
     let stream = input
         .streams()
@@ -28,7 +32,14 @@ pub(super) fn decode_with_threads(path: &Path, threads: usize) -> DecodeResult {
     options.set("flags", "+bitexact");
     options.set("threads", &threads.to_string());
     options.set("thread_type", "slice");
-    options.set("err_detect", "+crccheck+buffer+compliant+explode");
+    options.set(
+        "err_detect",
+        if strict {
+            "+crccheck+buffer+compliant+explode"
+        } else {
+            "0"
+        },
+    );
     let mut decoder = context
         .decoder()
         .open_as_with(codec, options)
