@@ -1,0 +1,169 @@
+--- a/libavcodec/mpeg12dec.c
++++ b/libavcodec/mpeg12dec.c
+@@ -1,4 +1,7 @@
+ /*
++ * Modified by ffmpeg-decode-static on 2026-11-18:
++ * propagate invalid motion-code errors before updating vector predictors.
++ *
+  * MPEG-1/2 decoder
+  * Copyright (c) 2000, 2001 Fabrice Bellard
+  * Copyright (c) 2002-2013 Michael Niedermayer <michaelni@gmx.at>
+@@ -102,15 +105,17 @@
+ } Mpeg1Context;
+ 
+ /* as H.263, but only 17 codes */
+-static int mpeg_decode_motion(Mpeg12SliceContext *const s, int fcode, int pred)
++static int mpeg_decode_motion(Mpeg12SliceContext *const s, int fcode, int pred, int *motion)
+ {
+     int code, sign, val, shift;
+ 
+     code = get_vlc2(&s->gb, ff_mv_vlc, MV_VLC_BITS, 2);
+-    if (code == 0)
+-        return pred;
+     if (code < 0)
+-        return 0xffff;
++        return AVERROR_INVALIDDATA;
++    if (code == 0) {
++        *motion = pred;
++        return 0;
++    }
+ 
+     sign  = get_bits1(&s->gb);
+     shift = fcode - 1;
+@@ -125,7 +130,8 @@
+     val += pred;
+ 
+     /* modulo decoding */
+-    return sign_extend(val, 5 + shift);
++    *motion = sign_extend(val, 5 + shift);
++    return 0;
+ }
+ 
+ #define MAX_INDEX (64 - 1)
+@@ -404,7 +410,7 @@
+ 
+ static int mpeg_decode_mb(Mpeg12SliceContext *const s, int *mb_skip_run)
+ {
+-    int i, j, k, cbp, val, mb_type, motion_type;
++    int i, j, k, cbp, val, mb_type, motion_type, motion;
+     const int mb_block_count = 4 + (1 << s->c.chroma_format);
+     int ret;
+ 
+@@ -493,14 +499,18 @@
+             if (s->c.picture_structure != PICT_FRAME)
+                 skip_bits1(&s->gb);  /* field select */
+ 
++            if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[0][0], s->c.last_mv[0][0][0],
++                                          &motion)) < 0)
++                return ret;
+             s->c.mv[0][0][0]      =
+             s->c.last_mv[0][0][0] =
+-            s->c.last_mv[0][1][0] = mpeg_decode_motion(s, s->c.mpeg_f_code[0][0],
+-                                                       s->c.last_mv[0][0][0]);
++            s->c.last_mv[0][1][0] = motion;
++            if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[0][1], s->c.last_mv[0][0][1],
++                                          &motion)) < 0)
++                return ret;
+             s->c.mv[0][0][1]      =
+             s->c.last_mv[0][0][1] =
+-            s->c.last_mv[0][1][1] = mpeg_decode_motion(s, s->c.mpeg_f_code[0][1],
+-                                                       s->c.last_mv[0][0][1]);
++            s->c.last_mv[0][1][1] = motion;
+ 
+             check_marker(s->c.avctx, &s->gb, "after concealment_motion_vectors");
+         } else {
+@@ -578,16 +588,18 @@
+                     for (i = 0; i < 2; i++) {
+                         if (HAS_MV(mb_type, i)) {
+                             /* MT_FRAME */
++                            if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][0], s->c.last_mv[i][0][0],
++                                                          &motion)) < 0)
++                                return ret;
+                             s->c.mv[i][0][0]      =
+                             s->c.last_mv[i][0][0] =
+-                            s->c.last_mv[i][1][0] =
+-                                mpeg_decode_motion(s, s->c.mpeg_f_code[i][0],
+-                                                   s->c.last_mv[i][0][0]);
++                            s->c.last_mv[i][1][0] = motion;
++                            if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][1], s->c.last_mv[i][0][1],
++                                                          &motion)) < 0)
++                                return ret;
+                             s->c.mv[i][0][1]      =
+                             s->c.last_mv[i][0][1] =
+-                            s->c.last_mv[i][1][1] =
+-                                mpeg_decode_motion(s, s->c.mpeg_f_code[i][1],
+-                                                   s->c.last_mv[i][0][1]);
++                            s->c.last_mv[i][1][1] = motion;
+                             /* full_pel: only for MPEG-1 */
+                             if (s->c.full_pel[i]) {
+                                 s->c.mv[i][0][0] *= 2;
+@@ -604,8 +616,10 @@
+                             for (j = 0; j < 2; j++) {
+                                 s->c.field_select[i][j] = get_bits1(&s->gb);
+                                 for (k = 0; k < 2; k++) {
+-                                    val = mpeg_decode_motion(s, s->c.mpeg_f_code[i][k],
+-                                                             s->c.last_mv[i][j][k]);
++                                    if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][k], s->c.last_mv[i][j][k],
++                                                                  &motion)) < 0)
++                                        return ret;
++                                    val = motion;
+                                     s->c.last_mv[i][j][k] = val;
+                                     s->c.mv[i][j][k]      = val;
+                                 }
+@@ -622,13 +636,17 @@
+                         if (HAS_MV(mb_type, i)) {
+                             for (j = 0; j < 2; j++) {
+                                 s->c.field_select[i][j] = get_bits1(&s->gb);
+-                                val = mpeg_decode_motion(s, s->c.mpeg_f_code[i][0],
+-                                                         s->c.last_mv[i][j][0]);
++                                if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][0], s->c.last_mv[i][j][0],
++                                                              &motion)) < 0)
++                                    return ret;
++                                val = motion;
+                                 s->c.last_mv[i][j][0] = val;
+                                 s->c.mv[i][j][0]      = val;
+                                 ff_tlog(s->c.avctx, "fmx=%d\n", val);
+-                                val = mpeg_decode_motion(s, s->c.mpeg_f_code[i][1],
+-                                                         s->c.last_mv[i][j][1] >> 1);
++                                if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][1], s->c.last_mv[i][j][1] >> 1,
++                                                              &motion)) < 0)
++                                    return ret;
++                                val = motion;
+                                 s->c.last_mv[i][j][1] = 2 * val;
+                                 s->c.mv[i][j][1]      = val;
+                                 ff_tlog(s->c.avctx, "fmy=%d\n", val);
+@@ -642,8 +660,10 @@
+                         if (HAS_MV(mb_type, i)) {
+                             s->c.field_select[i][0] = get_bits1(&s->gb);
+                             for (k = 0; k < 2; k++) {
+-                                val = mpeg_decode_motion(s, s->c.mpeg_f_code[i][k],
+-                                                         s->c.last_mv[i][0][k]);
++                                if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][k], s->c.last_mv[i][0][k],
++                                                              &motion)) < 0)
++                                    return ret;
++                                val = motion;
+                                 s->c.last_mv[i][0][k] = val;
+                                 s->c.last_mv[i][1][k] = val;
+                                 s->c.mv[i][0][k]      = val;
+@@ -663,13 +683,17 @@
+                         int dmx, dmy, mx, my, m;
+                         const int my_shift = s->c.picture_structure == PICT_FRAME;
+ 
+-                        mx = mpeg_decode_motion(s, s->c.mpeg_f_code[i][0],
+-                                                s->c.last_mv[i][0][0]);
++                        if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][0], s->c.last_mv[i][0][0],
++                                                      &motion)) < 0)
++                            return ret;
++                        mx = motion;
+                         s->c.last_mv[i][0][0] = mx;
+                         s->c.last_mv[i][1][0] = mx;
+                         dmx = get_dmv(s);
+-                        my  = mpeg_decode_motion(s, s->c.mpeg_f_code[i][1],
+-                                                 s->c.last_mv[i][0][1] >> my_shift);
++                        if ((ret = mpeg_decode_motion(s, s->c.mpeg_f_code[i][1], s->c.last_mv[i][0][1] >> my_shift,
++                                                      &motion)) < 0)
++                            return ret;
++                        my  = motion;
+                         dmy = get_dmv(s);
+ 
+ 

@@ -43,4 +43,6 @@ while read -r _ name url sha; do
     verify_sha256 "$dest/$name" "$sha"
 done < <(source_table)
 
+"$REPO_ROOT/scripts/package-patches.sh" "$dest"
+
 log "sources verified in $dest"
