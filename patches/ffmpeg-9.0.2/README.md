@@ -26,3 +26,9 @@ extract this patch archive into a separate directory, and run the helper's
 `scripts/apply-patches.sh SOURCE_DIRECTORY PATCH_DIRECTORY`. It needs GNU patch,
 GNU tar, xz and a SHA-256 tool. The helper build applies the same series before
 configuration on every target. No encoder, muxer or hardware interface is added.
+
+The third patch rejects zero macroblock quantiser updates in all three MPEG-1/2
+read sites under AV_EF_EXPLODE, returning InvalidData. Nonzero scales, lenient
+recognition and the VCR2 codec-tag exception retain their existing behavior.
+No shared block-reader or slice-header policy changes. ADR0009 in the helper
+repository records the normative basis and validation boundaries.

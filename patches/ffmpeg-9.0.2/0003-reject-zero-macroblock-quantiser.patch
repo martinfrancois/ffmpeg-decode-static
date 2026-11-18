@@ -1,0 +1,97 @@
+--- a/libavcodec/mpeg12dec.c
++++ b/libavcodec/mpeg12dec.c
+@@ -147,8 +147,9 @@
+         }                                                                     \
+     } while (0)
+
++/* Modified 2026-11-18: also reject zero macroblock quantiser updates. */
+ /* VCR2 shares MPEG-2's codec ID but retains its existing decoding policy. */
+-static int mpeg12_check_coefficients(const Mpeg12SliceContext *s)
++static int mpeg12_strict_checks(const Mpeg12SliceContext *s)
+ {
+     return (s->c.avctx->err_recognition & AV_EF_EXPLODE) &&
+            s->c.codec_tag != AV_RL32("VCR2");
+@@ -157,7 +158,7 @@
+ static inline int mpeg1_decode_block_inter(Mpeg12SliceContext *const s,
+                                            int16_t *block, int n)
+ {
+-    const int check = mpeg12_check_coefficients(s);
++    const int check = mpeg12_strict_checks(s);
+     int level, i, j, run;
+     const uint8_t *const scantable = s->c.intra_scantable.permutated;
+     const uint16_t *quant_matrix = s->c.inter_matrix;
+@@ -248,7 +249,7 @@
+ static inline int mpeg2_decode_block_non_intra(Mpeg12SliceContext *const s,
+                                                int16_t *block, int n)
+ {
+-    const int check = mpeg12_check_coefficients(s);
++    const int check = mpeg12_strict_checks(s);
+     int level, i, j, run;
+     const uint8_t *const scantable = s->c.intra_scantable.permutated;
+     const uint16_t *quant_matrix;
+@@ -341,7 +342,7 @@
+                                            int16_t *block, int n)
+ {
+     const int check = s->c.codec_id == AV_CODEC_ID_MPEG2VIDEO &&
+-                      mpeg12_check_coefficients(s);
++                      mpeg12_strict_checks(s);
+     int level, dc, diff, i, j, run;
+     int component;
+     const RL_VLC_ELEM *rl_vlc;
+@@ -597,8 +598,11 @@
+             !s->c.frame_pred_frame_dct)
+             s->c.interlaced_dct = get_bits1(&s->gb);
+
+-        if (IS_QUANT(mb_type))
++        if (IS_QUANT(mb_type)) {
+             s->c.qscale = mpeg_get_qscale(&s->gb, s->c.q_scale_type);
++            if (!s->c.qscale && mpeg12_strict_checks(s))
++                return AVERROR_INVALIDDATA;
++        }
+
+         if (s->c.concealment_motion_vectors) {
+             /* just parse them */
+@@ -636,7 +640,7 @@
+                                                   s->c.intra_scantable.permutated,
+                                                   s->last_dc, s->block[i],
+                                                   i, s->c.qscale,
+-                                                  mpeg12_check_coefficients(s));
++                                                  mpeg12_strict_checks(s));
+                 if (ret < 0) {
+                     if (ret != AVERROR_PATCHWELCOME)
+                         av_log(s->c.avctx, AV_LOG_ERROR, "ac-tex damaged at %d %d\n",
+@@ -661,8 +665,11 @@
+                 s->c.field_select[0][0] = s->c.picture_structure - 1;
+             }
+
+-            if (IS_QUANT(mb_type))
++            if (IS_QUANT(mb_type)) {
+                 s->c.qscale = mpeg_get_qscale(&s->gb, s->c.q_scale_type);
++                if (!s->c.qscale && mpeg12_strict_checks(s))
++                    return AVERROR_INVALIDDATA;
++            }
+
+             s->c.last_mv[0][0][0] = 0;
+             s->c.last_mv[0][0][1] = 0;
+@@ -682,8 +689,11 @@
+                     s->c.interlaced_dct = get_bits1(&s->gb);
+             }
+
+-            if (IS_QUANT(mb_type))
++            if (IS_QUANT(mb_type)) {
+                 s->c.qscale = mpeg_get_qscale(&s->gb, s->c.q_scale_type);
++                if (!s->c.qscale && mpeg12_strict_checks(s))
++                    return AVERROR_INVALIDDATA;
++            }
+
+             /* motion vectors */
+             s->c.mv_dir = MB_TYPE_MV_2_MV_DIR(mb_type);
+@@ -891,7 +901,7 @@
+         }
+     }
+
+-    if (mpeg12_check_coefficients(s) &&
++    if (mpeg12_strict_checks(s) &&
+         s->c.avctx->idct_algo == FF_IDCT_SIMPLE && !s->c.avctx->lowres) {
+         for (i = 0; i < mb_block_count; i++) {
+             if (s->c.mb_intra || s->c.block_last_index[i] >= 0) {
